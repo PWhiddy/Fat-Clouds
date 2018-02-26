@@ -26,15 +26,22 @@ void save_image(uint8_t *pixels, dims img_dims, std::string name) {
 // Avoid reallocating volume buffer each step by swapping?
 void simulate_fluid(float *volume, dims dimensions, float time_step);
 
-__device__ inline float get_density(float3 p, int3 d, float* vol) {
-	int3 c = make_int3(p);
+__device__ inline int get_voxel(int x, int y, int z, int3 d)
+{
+	return z*d.y*d.x + y*d.x + x;
+}
+
+__device__ inline float get_density(int3 c, int3 d, float* vol) {
 	if (c.x < 0 || c.y < 0 || c.z < 0 ||
 	    c.x >= d.x || c.y >= d.y || c.z >= d.z) {
 		return 0.0;
 	} else {
-		return vol[c.z*d.y*d.x + c.y*d.x + c.x];
+		return vol[ get_voxel( c.x, c.y, c.z, d ) ];
 	}
-	
+}
+
+__device__ inline float get_density(float3 p, int3 d, float* vol) {
+	return get_density(make_int3(p), d, vol);
 }
 
 __global__ void initialize_volume(float *volume, dims vd)
@@ -43,14 +50,30 @@ __global__ void initialize_volume(float *volume, dims vd)
 	int y = blockDim.y*blockIdx.y+threadIdx.y;
 	int z = blockDim.z*blockIdx.z+threadIdx.z;
 	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-	const float width = 64.0;
-	const float den = 0.1;
+	const float width = 128.0;
+	const float den = 0.018;
 	float dx = float(x-vd.x/2);
 	float dy = float(y-vd.y/2);
 	float dz = float(z-vd.z/2);
 	float dist = sqrtf(dx*dx+dy*dy+dz*dz);
-	float density = den/(1.0+pow(1.5,dist-width));
-	volume[z*vd.y*vd.x + y*vd.x + x] = density;
+	float density = den/(1.0+pow(1.2,dist-width));
+	volume[ get_voxel( x, y, z, make_int3(vd.x, vd.y, vd.z)) ] 
+		= density;
+}
+
+__global__ void diffuse(float *volume, dims vd)
+{
+	__shared__ float loc[1024];
+	int x = blockDim.x*blockIdx.x+threadIdx.x;
+	int y = blockDim.y*blockIdx.y+threadIdx.y;
+	int z = blockDim.z*blockIdx.z+threadIdx.z;
+	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+	// Fill shared memory with 1 extra pixel on each side
+	int shared_pixel = z*blockDim.y*blockDim.x+y*blockDim.x+x;
+	//loc[shared_pixel] = 
+	// 
+	int3 d = make_int3(vd.x, vd.y, vd.z);
+	//float up = volume[ get_voxel(x,y,z, 
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
@@ -138,51 +161,13 @@ void render_fluid(uint8_t *render_target, dims img_dims,
 	cudaFree(device_img);
 }
 
-__global__ void kernel_A( float *g_data, int dimx, int dimy )
-{
-	int ix  = blockIdx.x;
-    int iy  = blockIdx.y*blockDim.y + threadIdx.y;
-    int idx = iy*dimx + ix;
-
-    float value = g_data[idx];
-	
-    value = sinf(value);
-
-    g_data[idx] = value;
-}
-
-float run_kernel( void (*kernel)( float*, int,int), float *d_data, 
-	int dimx, int dimy, int nreps, int blockx, int blocky )
-{
-	float measured_time=0.0f;
-	cudaEvent_t start, stop;
-	cudaEventCreate( &start );
-	cudaEventCreate( &stop  );
-
-	dim3 block( blockx, blocky );
-	dim3 grid( dimx/block.x, dimy/block.y );
-
-	cudaEventRecord( start, 0 );
-	for(int i=0; i<nreps; i++)
-		kernel<<<grid,block>>>( d_data, dimx,dimy );
-	cudaEventRecord( stop, 0 );
-	cudaThreadSynchronize();
-	cudaEventElapsedTime( &measured_time, start, stop );
-	measured_time /= nreps;
-
-	cudaEventDestroy( start );
-	cudaEventDestroy( stop );
-
-	return measured_time;
-}
-
-int main()
+int main(int argc, char* args[])
 {
 	
 	dims vol_d;
-	vol_d.x = 256;
-	vol_d.y = 256;
-	vol_d.z = 256;
+	vol_d.x = 512;
+	vol_d.y = 512;
+	vol_d.z = 512;
 	dims img_d;
 	img_d.x = 800;
 	img_d.y = 600;
@@ -192,9 +177,9 @@ int main()
 	cam.y = static_cast<float>(vol_d.y)*0.5;
 	cam.z = 0.0;
 	fdims light;
-	light.x = -0.1;
+	light.x = -0.2;
 	light.y = -0.9;
-	light.z = 0.2;
+	light.z =  0.2;
 
 	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
 	int vol_bytes = vol_d.x*vol_d.y*vol_d.z*sizeof(float);
@@ -206,6 +191,8 @@ int main()
                 return -1;
         }
 
+        printf("Allocated %.2f MB on GPU\n", vol_bytes/(1024.f*1024.f) );
+
 	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
 		dim3(8,8,8)>>>(d_vol, vol_d);
 
@@ -214,44 +201,9 @@ int main()
 	save_image(img, img_d, "test.ppm");
 
 	delete[] img;
-
-	int dimx = 2*1024;
-	int dimy = 2*1024;
-	
-	int nreps = 10;
-
-        int nbytes = dimx*dimy*sizeof(float);
-
-        float *d_data=0, *h_data=0;
-        cudaMalloc( (void**)&d_data, nbytes );
-        if( 0 == d_data )
-        {
-                printf("couldn't allocate GPU memory\n");
-                return -1;
-        }
-        printf("allocated %.2f MB on GPU\n", nbytes/(1024.f*1024.f) );
-        h_data = (float*)malloc( nbytes );
-        if( 0 == h_data )
-        {
-                printf("couldn't allocate CPU memory\n");
-                return -2;
-        }
-        printf("allocated %.2f MB on CPU\n", nbytes/(1024.f*1024.f) );
-        for(int i=0; i<dimx*dimy; i++)
-                h_data[i] = 10.f + rand() % 256;
-        cudaMemcpy( d_data, h_data, nbytes, cudaMemcpyHostToDevice );
-
-        float measured_time=0.0f;
-
-        measured_time = run_kernel( kernel_A, d_data, dimx,dimy, nreps, 1, 512 );
-        printf("A:  %8.2f ms\n", measured_time );
+	cudaFree(d_vol);
 
         printf("CUDA: %s\n", cudaGetErrorString( cudaGetLastError() ) );
-
-        if( d_data )
-                cudaFree( d_data );
-        if( h_data )
-                free( h_data );
 
         cudaThreadExit();
 
