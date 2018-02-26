@@ -37,6 +37,22 @@ __device__ inline float get_density(float3 p, int3 d, float* vol) {
 	
 }
 
+__global__ void initialize_volume(float *volume, dims vd)
+{
+	int x = blockDim.x*blockIdx.x+threadIdx.x;
+	int y = blockDim.y*blockIdx.y+threadIdx.y;
+	int z = blockDim.z*blockIdx.z+threadIdx.z;
+	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+	const float width = 64.0;
+	const float den = 0.1;
+	float dx = float(x-vd.x/2);
+	float dy = float(y-vd.y/2);
+	float dz = float(z-vd.z/2);
+	float dist = sqrtf(dx*dx+dy*dy+dz*dz);
+	float density = den/(1.0+pow(1.5,dist-width));
+	volume[z*vd.y*vd.x + y*vd.x + x] = density;
+}
+
 __global__ void render_pixel( uint8_t *image, float *volume, 
 	dims img_dims, dims vol_dims, float step_size, 
 	fdims light_dir, fdims cam_pos, float rotation)
@@ -53,28 +69,31 @@ __global__ void render_pixel( uint8_t *image, float *volume,
 
 	// Set up ray originating from camera
 	float3 ray_pos = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
-	float3 ray_dir = normalize(make_float3(uvx,uvy,0.4));
+	float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
 	float3 dir_to_light = normalize(
 		make_float3(light_dir.x, light_dir.y, light_dir.z));
-	float accum = 0.0;
+	float d_accum = 1.0;
+	float light_accum = 0.0;
 	
 	// Trace ray through volume
-	for (int step=0; step<64; step++) {
+	for (int step=0; step<512; step++) {
 	// At each step, cast occlusion ray towards light source	
 		float3 occ_pos = ray_pos;
 		float occlusion = 1.0;
-		for (int occ=0; occ<32; occ++) {
-			occlusion *= (1.0-get_density(occ_pos, vd, volume));
+		for (int occ=0; occ<512; occ++) {
+			occlusion *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
 			occ_pos += dir_to_light*step_size;
 		}
-		accum += get_density(ray_pos, vd, volume)*occlusion;
+		float c_density = get_density(ray_pos, vd, volume);
+		d_accum *= fmax(1.0-c_density,0.0);
+		light_accum += d_accum*c_density*occlusion;
 		ray_pos += ray_dir*step_size;
 	}
 
 	int pixel = 3*(y*img_dims.x+x);
-	image[pixel+0] = (uint8_t)(50.0*accum);
-	image[pixel+1] = (uint8_t)(50.0*accum);
-	image[pixel+2] = (uint8_t)(50.0*accum);
+	image[pixel+0] = (uint8_t)(fmin(255.0*light_accum, 255.0));
+	image[pixel+1] = (uint8_t)(fmin(255.0*light_accum, 255.0));
+	image[pixel+2] = (uint8_t)(fmin(255.0*light_accum, 255.0));
 }
 
 void render_fluid(uint8_t *render_target, dims img_dims, 
@@ -161,17 +180,17 @@ int main()
 {
 	
 	dims vol_d;
-	vol_d.x = 64;
-	vol_d.y = 64;
-	vol_d.z = 64;
+	vol_d.x = 256;
+	vol_d.y = 256;
+	vol_d.z = 256;
 	dims img_d;
 	img_d.x = 800;
 	img_d.y = 600;
 
 	fdims cam;
-	cam.x = 0.0;
-	cam.y = 0.0;
-	cam.z = -1.0;
+	cam.x = static_cast<float>(vol_d.x)*0.5;
+	cam.y = static_cast<float>(vol_d.y)*0.5;
+	cam.z = 0.0;
 	fdims light;
 	light.x = -0.1;
 	light.y = -0.9;
@@ -186,6 +205,9 @@ int main()
                 printf("couldn't allocate GPU memory\n");
                 return -1;
         }
+
+	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
+		dim3(8,8,8)>>>(d_vol, vol_d);
 
 	render_fluid(img, img_d, d_vol, vol_d, 1.0, light, cam, 0.0);
 
