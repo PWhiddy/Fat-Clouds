@@ -1,4 +1,4 @@
 Fluid simulator and renderer
 
-![image](https://github.com/PWhiddy/fluid/screenshots/test.jpg "Render")
+![](https://github.com/PWhiddy/fluid/blob/master/screenshots/test.jpg "Render")
 
