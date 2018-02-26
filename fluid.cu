@@ -11,6 +11,34 @@ struct fdims {
     float x, y, z;
 };
 
+void save_image(uint8_t *pixels, dims img_dims, std::string name) {
+    std::ofstream file(name, std::ofstream::binary);
+    if (file.is_open()) {
+        file << "P6\n" << img_dims.x << " " << img_dims.y << "\n" << "255\n";
+        file.write((char *)pixels, img_dims.x*img_dims.y*3);
+        file.close();
+    } else {
+        std::cout << "Could not open file :(\n";
+    }
+}
+
+// Avoid reallocating volume buffer each step by swapping?
+void simulate_fluid(float *volume, dims dimensions, float time_step);
+
+__global__ void render_pixel( uint8_t *image, float *volume, 
+	dims img_dims, dims vol_dims, float step_size, 
+	fdims light_dir, fdims cam_pos, float rotation)
+{
+	int x = blockDim.x*blockIdx.x+threadIdx.x;
+	int y = blockDim.y*blockIdx.y+threadIdx.y;
+	if (x >= img_dims.x || y >= img_dims.y) return;
+	
+	int pixel = 3*(y*img_dims.x+x);
+	image[pixel+0] = 200;
+	image[pixel+1] = 100;
+	image[pixel+2] = 50;
+}
+
 void render_fluid(uint8_t *render_target, dims img_dims, float *d_volume /*pointer to gpu mem?*/, dims vol_dims, float step_size, fdims light_dir, fdims cam_pos, float rotation) {
 
 	float measured_time=0.0f;
@@ -24,7 +52,7 @@ void render_fluid(uint8_t *render_target, dims img_dims, float *d_volume /*point
 	cudaEventRecord( start, 0 );
 	
 	// Allocate device memory for image
-	int img_bytes = sizeof(uint8_t)*img_dims.x*img_dims.y;
+	int img_bytes = 3*sizeof(uint8_t)*img_dims.x*img_dims.y;
 	uint8_t *device_img;
 	cudaMalloc( (void**)&device_img, img_bytes );
         if( 0 == device_img )
@@ -33,9 +61,9 @@ void render_fluid(uint8_t *render_target, dims img_dims, float *d_volume /*point
    		return;
         }
 
-	//render_pixel<<<grid,block>>>( 
-	//	device_img, d_volume, img_dims, vol_dims, 
-	//	step_size, light_dir, cam_pos, rotation);
+	render_pixel<<<grid,block>>>( 
+		device_img, d_volume, img_dims, vol_dims, 
+		step_size, light_dir, cam_pos, rotation);
 
 	// Read image back
 	cudaMemcpy( render_target, device_img, img_bytes, cudaMemcpyDeviceToHost );
@@ -50,20 +78,6 @@ void render_fluid(uint8_t *render_target, dims img_dims, float *d_volume /*point
 	std::cout << "Render Time: " << measured_time << "\n";
 	cudaFree(device_img);
 }
-
-void save_image(uint8_t *pixels, dims img_dims, std::string name) {
-    std::ofstream file(name, std::ofstream::binary);
-    if (file.is_open()) {
-        file << "P6\n" << img_dims.x << " " << img_dims.y << "\n" << "255\n";
-        file.write((char *)pixels, img_dims.x*img_dims.y*3);
-        file.close();
-    } else {
-        std::cout << "Could not open file :(\n";
-    }
-}
-
-// Avoid reallocating volume buffer each step by swapping?
-void simulate_fluid(float *volume, dims dimensions, float time_step);
 
 __global__ void kernel_A( float *g_data, int dimx, int dimy )
 {
@@ -104,6 +118,40 @@ float run_kernel( void (*kernel)( float*, int,int), float *d_data, int dimx, int
 
 int main()
 {
+	
+	dims vol_d;
+	vol_d.x = 64;
+	vol_d.y = 64;
+	vol_d.z = 64;
+	dims img_d;
+	img_d.x = 800;
+	img_d.y = 600;
+
+	fdims cam;
+	cam.x = 0.0;
+	cam.y = 0.0;
+	cam.z = -1.0;
+	fdims light;
+	light.x = -0.1;
+	light.y = -0.9;
+	light.z = 0.2;
+
+	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
+	int vol_bytes = vol_d.x*vol_d.y*vol_d.z*sizeof(float);
+	float *d_vol = 0;
+        cudaMalloc( (void**)&d_vol, vol_bytes );
+        if( 0 == d_vol )
+        {
+                printf("couldn't allocate GPU memory\n");
+                return -1;
+        }
+
+	render_fluid(img, img_d, d_vol, vol_d, 1.0, light, cam, 0.0);
+
+	save_image(img, img_d, "test.ppm");
+
+	delete[] img;
+
 	int dimx = 2*1024;
 	int dimy = 2*1024;
 	
