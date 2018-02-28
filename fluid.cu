@@ -6,12 +6,22 @@
 #include <iomanip>
 #include "cutil_math.h"
 
+// Same as a dim3
 struct dims {
     int x, y, z;
 };
 
 struct fdims {
     float x, y, z;
+};
+
+// Stores value contained in a cell as well
+// as the values of cells adjacent to it
+struct adjacent_cells {
+    float o,
+    xn, xp,
+    yn, yp,
+    zn, zp;      
 };
 
 std::string pad_number(int n)
@@ -80,14 +90,49 @@ inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
 }
 
+__device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx, 
+    dim3 thrIdx, int3 vd, float *shared, float *v_src) 
+{
+    const int padding = 2;
+	const int sdim = blkDim.x+padding; // 10
+	int t_idx = thrIdx.z*blkDim.y*blkDim.x 
+		+ thrIdx.y*blkDim.x + thrIdx.x; 
+    // Load sdim*sdim*sdim cube of memory into shared array 
+    const int cutoff = (sdim*sdim*sdim)/2;
+	if (t_idx < cutoff) {
+        int3 sp = mod_coords(t_idx, sdim);
+        sp = sp + blkDim*blkIdx - 1;
+        shared[t_idx] = get_density( sp, vd, v_src);
+        sp = mod_coords(t_idx+cutoff, sdim);
+        sp = sp + blkDim*blkIdx - 1;
+        shared[t_idx+cutoff] = get_density( sp, vd, v_src);
+    }
+    __syncthreads();
+    
+    adjacent_cells aj;
+	
+    int3 sc = make_int3( thrIdx.x, thrIdx.y, thrIdx.z );
+    int3 blk_dim = make_int3(sdim, sdim, sdim);
+    aj.o  = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+1, blk_dim) ];
+	aj.yp = shared[ get_voxel(sc.x+1,sc.y+2,sc.z+1, blk_dim) ];
+    aj.yn = shared[ get_voxel(sc.x+1,sc.y  ,sc.z+1, blk_dim) ];
+    aj.xn = shared[ get_voxel(sc.x  ,sc.y+1,sc.z+1, blk_dim) ];
+    aj.xp = shared[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
+    aj.zp = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
+    aj.zn = shared[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
+
+    return aj;
+}
+
 __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
 	__shared__ float loc[1024];
 	const int x = blockDim.x*blockIdx.x+threadIdx.x;
 	const int y = blockDim.y*blockIdx.y+threadIdx.y;
 	const int z = blockDim.z*blockIdx.z+threadIdx.z;
+
     const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
-	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    /*
     const int padding = 2;
 	const int sdim = blockDim.x+padding; // 10
 	int t_idx = threadIdx.z*blockDim.y*blockDim.x 
@@ -103,6 +148,8 @@ __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amoun
         loc[t_idx+cutoff] = get_density( sp, vd, v_src);
     }
     __syncthreads();
+
+	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
 	
     int3 sc = make_int3( threadIdx.x, threadIdx.y, threadIdx.z );
     int3 blk_dim = make_int3(sdim, sdim, sdim);
@@ -113,11 +160,19 @@ __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amoun
     float right = loc[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
     float front = loc[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
     float back  = loc[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
-
+    
     float avg = (up+down+left+right+front+back)/6.0;
-    avg = avg - cent;
-    v_dst[ get_voxel(x,y,z, vd) ] = cent + avg*amount;
+    */
 
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+
+    adjacent_cells c = read_adjacent(
+        blockDim, blockIdx, threadIdx, vd, loc, v_src); 
+
+    float avg = (c.xp+c.xn+c.yp+c.yn+c.zp+c.zn)/6.0;
+
+    avg = avg - c.o;//cent;
+    v_dst[ get_voxel(x,y,z, vd) ] = c.o/*cent*/ + avg*amount;
 }
 
 // Avoid reallocating volume buffer each step by swapping?
@@ -259,13 +314,13 @@ int main(int argc, char* args[])
 	float *d_volA = 0;
     float *d_volB = 0;
     cudaMalloc( (void**)&d_volA, vol_bytes );
-    cudaMalloc( (void**)&d_volB, vol_bytes );
+    cudaMalloc( (void**)&d_volB, vol_bytes );   
     if( 0 == d_volA || 0 == d_volB )
     {
         printf("couldn't allocate GPU memory\n");
         return -1;
     }
-
+ 
     printf("Allocated %.2f MB on GPU\n", 2*vol_bytes/(1024.f*1024.f) );
 
 	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
