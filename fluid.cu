@@ -110,7 +110,6 @@ __device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx,
     __syncthreads();
     
     adjacent_cells aj;
-	
     int3 sc = make_int3( thrIdx.x, thrIdx.y, thrIdx.z );
     int3 blk_dim = make_int3(sdim, sdim, sdim);
     aj.o  = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+1, blk_dim) ];
@@ -120,7 +119,6 @@ __device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx,
     aj.xp = shared[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
     aj.zp = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
     aj.zn = shared[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
-
     return aj;
 }
 
@@ -130,49 +128,16 @@ __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amoun
 	const int x = blockDim.x*blockIdx.x+threadIdx.x;
 	const int y = blockDim.y*blockIdx.y+threadIdx.y;
 	const int z = blockDim.z*blockIdx.z+threadIdx.z;
-
     const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
-    /*
-    const int padding = 2;
-	const int sdim = blockDim.x+padding; // 10
-	int t_idx = threadIdx.z*blockDim.y*blockDim.x 
-		+ threadIdx.y*blockDim.x + threadIdx.x; 
-    // Load sdim*sdim*sdim cube of memory into shared array 
-    const int cutoff = sdim*sdim*sdim/2;
-	if (t_idx < cutoff) {
-        int3 sp = mod_coords(t_idx, sdim);
-        sp = sp + blockDim*blockIdx - 1;
-        loc[t_idx] = get_density( sp, vd, v_src);
-        sp = mod_coords(t_idx+cutoff, sdim);
-        sp = sp + blockDim*blockIdx - 1;
-        loc[t_idx+cutoff] = get_density( sp, vd, v_src);
-    }
-    __syncthreads();
-
-	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-	
-    int3 sc = make_int3( threadIdx.x, threadIdx.y, threadIdx.z );
-    int3 blk_dim = make_int3(sdim, sdim, sdim);
-    float cent  = loc[ get_voxel(sc.x+1,sc.y+1,sc.z+1, blk_dim) ];
-	float up    = loc[ get_voxel(sc.x+1,sc.y+2,sc.z+1, blk_dim) ];
-    float down  = loc[ get_voxel(sc.x+1,sc.y  ,sc.z+1, blk_dim) ];
-    float left  = loc[ get_voxel(sc.x  ,sc.y+1,sc.z+1, blk_dim) ];
-    float right = loc[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
-    float front = loc[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
-    float back  = loc[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
-    
-    float avg = (up+down+left+right+front+back)/6.0;
-    */
-
-    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
 
     adjacent_cells c = read_adjacent(
         blockDim, blockIdx, threadIdx, vd, loc, v_src); 
 
-    float avg = (c.xp+c.xn+c.yp+c.yn+c.zp+c.zn)/6.0;
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
 
-    avg = avg - c.o;//cent;
-    v_dst[ get_voxel(x,y,z, vd) ] = c.o/*cent*/ + avg*amount;
+    float avg = (c.xp+c.xn+c.yp+c.yn+c.zp+c.zn)/6.0;
+    avg = avg - c.o;
+    v_dst[ get_voxel(x,y,z, vd) ] = c.o + avg*amount;
 }
 
 // Avoid reallocating volume buffer each step by swapping?
