@@ -276,38 +276,25 @@ int main(int argc, char* args[])
 	light.z =  0.2;
 
 	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
-	int vol_bytes = vol_d.x*vol_d.y*vol_d.z*sizeof(float);
     int nelems =  vol_d.x*vol_d.y*vol_d.z;
     DoubleBuffer<float> *density = new DoubleBuffer<float>(nelems);
-	float *d_volA = 0;
-    float *d_volB = 0;
-    cudaMalloc( (void**)&d_volA, vol_bytes );
-    cudaMalloc( (void**)&d_volB, vol_bytes );   
-    if( 0 == d_volA || 0 == d_volB )
-    {
-        printf("couldn't allocate GPU memory\n");
-        return -1;
-    }
- 
-    printf("Allocated %.2f MB on GPU\n", 2*vol_bytes/(1024.f*1024.f) );
 
 	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
-		dim3(8,8,8)>>>(d_volA, vol_d);
+		dim3(8,8,8)>>>(density->writeTarget(), vol_d);
+    density->swap();
 
     for (int f=0; f<=800; f++) {
         std::cout << "Step " << f+1 << "\n";
-        render_fluid(img, img_d, d_volA, vol_d, 1.0, light, cam, 0.0);
+        render_fluid(img, img_d, density->readTarget(), vol_d, 1.0, light, cam, 0.0);
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
         for (int st=0; st<30; st++) {
-            simulate_fluid(d_volA, d_volB, vol_d, 0.7);
-            std::swap(d_volA, d_volB);
+            simulate_fluid(density->readTarget(), density->writeTarget(), vol_d, 0.7);
+            density->swap();
         }
     }
 
 	delete[] img;
     delete density;
-	cudaFree(d_volA);
-    cudaFree(d_volB);
 
     printf("CUDA: %s\n", cudaGetErrorString( cudaGetLastError() ) );
 
