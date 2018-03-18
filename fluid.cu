@@ -5,6 +5,7 @@
 #include <sstream>
 #include <iomanip>
 #include "cutil_math.h"
+#include "double_buffer.cpp"
 
 // Same as a dim3
 struct dims {
@@ -93,7 +94,7 @@ inline __device__ int3 mod_coords(int i, int d) {
 __device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx, 
     dim3 thrIdx, int3 vd, float *shared, float *v_src) 
 {
-    const int padding = 2;
+    const int padding = 2; // How far to load past end of cube
 	const int sdim = blkDim.x+padding; // 10
 	int t_idx = thrIdx.z*blkDim.y*blkDim.x 
 		+ thrIdx.y*blkDim.x + thrIdx.x; 
@@ -276,6 +277,8 @@ int main(int argc, char* args[])
 
 	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
 	int vol_bytes = vol_d.x*vol_d.y*vol_d.z*sizeof(float);
+    int nelems =  vol_d.x*vol_d.y*vol_d.z;
+    DoubleBuffer<float> *density = new DoubleBuffer<float>(nelems);
 	float *d_volA = 0;
     float *d_volB = 0;
     cudaMalloc( (void**)&d_volA, vol_bytes );
@@ -302,6 +305,7 @@ int main(int argc, char* args[])
     }
 
 	delete[] img;
+    delete density;
 	cudaFree(d_volA);
     cudaFree(d_volB);
 
