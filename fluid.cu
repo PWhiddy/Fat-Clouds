@@ -53,37 +53,37 @@ inline __device__ int3 operator+(dim3 a, int3 b) {
 
 inline __device__ int get_voxel(int x, int y, int z, int3 d)
 {
-	return z*d.y*d.x + y*d.x + x;
+    return z*d.y*d.x + y*d.x + x;
 }
 
 inline __device__ float get_density(int3 c, int3 d, float* vol) {
-	if (c.x < 0 || c.y < 0 || c.z < 0 ||
-	    c.x >= d.x || c.y >= d.y || c.z >= d.z) {
-		return 0.0;
-	} else {
-		return vol[ get_voxel( c.x, c.y, c.z, d ) ];
-	}
+    if (c.x < 0 || c.y < 0 || c.z < 0 ||
+        c.x >= d.x || c.y >= d.y || c.z >= d.z) {
+    return 0.0;
+    } else {
+        return vol[ get_voxel( c.x, c.y, c.z, d ) ];
+    }
 }
 
 inline __device__ float get_density(float3 p, int3 d, float* vol) {
-	return get_density(make_int3(p), d, vol);
+    return get_density(make_int3(p), d, vol);
 }
    
 __global__ void initialize_volume(float *volume, dims vd)
 {
-	int x = blockDim.x*blockIdx.x+threadIdx.x;
-	int y = blockDim.y*blockIdx.y+threadIdx.y;
-	int z = blockDim.z*blockIdx.z+threadIdx.z;
-	if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-	const float width = 128.0;
-	const float den = 0.018;
-	float dx = float(x-vd.x/2);
-	float dy = float(y-vd.y/2);
-	float dz = float(z-vd.z/2);
-	float dist = sqrtf(dx*dx+dy*dy+dz*dz);
-	float density = den/(1.0+pow(1.2,dist-width));
-	volume[ get_voxel( x, y, z, make_int3(vd.x, vd.y, vd.z)) ] 
-		= density;
+    int x = blockDim.x*blockIdx.x+threadIdx.x;
+    int y = blockDim.y*blockIdx.y+threadIdx.y;
+    int z = blockDim.z*blockIdx.z+threadIdx.z;
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    const float width = 128.0;
+    const float den = 0.018;
+    float dx = float(x-vd.x/2);
+    float dy = float(y-vd.y/2);
+    float dz = float(z-vd.z/2);
+    float dist = sqrtf(dx*dx+dy*dy+dz*dz);
+    float density = den/(1.0+pow(1.2,dist-width));
+    volume[ get_voxel( x, y, z, make_int3(vd.x, vd.y, vd.z)) ] 
+        = density;
 }
 
 // Convert single index into 3D coordinates
@@ -100,11 +100,11 @@ inline __device__ float read_shared(float* mem, dim3 c,
 __device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx, 
     dim3 thrIdx, int3 vd, int sdim, float *shared, float *v_src) 
 {
-	int t_idx = thrIdx.z*blkDim.y*blkDim.x 
-		+ thrIdx.y*blkDim.x + thrIdx.x; 
+    int t_idx = thrIdx.z*blkDim.y*blkDim.x 
+        + thrIdx.y*blkDim.x + thrIdx.x; 
     // Load sdim*sdim*sdim cube of memory into shared array 
     const int cutoff = (sdim*sdim*sdim)/2;
-	if (t_idx < cutoff) {
+    if (t_idx < cutoff) {
         int3 sp = mod_coords(t_idx, sdim);
         sp = sp + blkDim*blkIdx - 1;
         shared[t_idx] = get_density( sp, vd, v_src);
@@ -119,7 +119,7 @@ __device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx,
     int3 sc = make_int3( thrIdx.x, thrIdx.y, thrIdx.z );
     int3 blk_dim = make_int3(sdim, sdim, sdim);
     aj.o  = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+1, blk_dim) ];
-	aj.yp = shared[ get_voxel(sc.x+1,sc.y+2,sc.z+1, blk_dim) ];
+        aj.yp = shared[ get_voxel(sc.x+1,sc.y+2,sc.z+1, blk_dim) ];
     aj.yn = shared[ get_voxel(sc.x+1,sc.y  ,sc.z+1, blk_dim) ];
     aj.xn = shared[ get_voxel(sc.x  ,sc.y+1,sc.z+1, blk_dim) ];
     aj.xp = shared[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
@@ -131,13 +131,13 @@ __device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx,
 
 __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
-	__shared__ float loc[1024];
+    __shared__ float loc[1024];
     const int padding = 1; // How far to load past end of cube
-	const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
+    const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
     const int3 s_dims = make_int3(sdim, sdim, sdim);
-	const int x = blockDim.x*blockIdx.x+threadIdx.x;
-	const int y = blockDim.y*blockIdx.y+threadIdx.y;
-	const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
     const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     /*adjacent_cells c = */load_shared(
@@ -170,142 +170,142 @@ void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 {
 
     float measured_time=0.0f;
-	cudaEvent_t start, stop;
-	cudaEventCreate( &start );
-	cudaEventCreate( &stop  );
+    cudaEvent_t start, stop;
+    cudaEventCreate( &start );
+    cudaEventCreate( &stop  );
 
-    int s = 8;
-	dim3 block( s, s, s );
-	dim3 grid( (vol_dim.x+s-1)/s, (vol_dim.y+s-1)/s, (vol_dim.z+s-1)/s );
+    const int s = 8;
+    dim3 block( s, s, s );
+    dim3 grid( (vol_dim.x+s-1)/s, (vol_dim.y+s-1)/s, (vol_dim.z+s-1)/s );
 
-	cudaEventRecord( start, 0 );
-	
-	diffusion<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
+    cudaEventRecord( start, 0 );
+        
+    diffusion<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
 
-	cudaEventRecord( stop, 0 );
-	cudaThreadSynchronize();
-	cudaEventElapsedTime( &measured_time, start, stop );
+    cudaEventRecord( stop, 0 );
+    cudaThreadSynchronize();
+    cudaEventElapsedTime( &measured_time, start, stop );
 
-	cudaEventDestroy( start );
-	cudaEventDestroy( stop );
+    cudaEventDestroy( start );
+    cudaEventDestroy( stop );
 
-	std::cout << "Simulation Time: " << measured_time << "\n";
+    std::cout << "Simulation Time: " << measured_time << "\n";
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
-	dims img_dims, dims vol_dims, float step_size, 
-	fdims light_dir, fdims cam_pos, float rotation)
+        dims img_dims, dims vol_dims, float step_size, 
+        fdims light_dir, fdims cam_pos, float rotation)
 {
-	const int x = blockDim.x*blockIdx.x+threadIdx.x;
-	const int y = blockDim.y*blockIdx.y+threadIdx.y;
-	if (x >= img_dims.x || y >= img_dims.y) return;
-	
-	int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
-	// Create Normalized UV image coordinates
-	float uvx = float(x)/float(img_dims.x)-0.5;
-	float uvy = float(y)/float(img_dims.y)-0.5;
-	uvx *= float(img_dims.x)/float(img_dims.y);	
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    if (x >= img_dims.x || y >= img_dims.y) return;
 
-	// Set up ray originating from camera
-	float3 ray_pos = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
-	const float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
-	const float3 dir_to_light = normalize(
-		make_float3(light_dir.x, light_dir.y, light_dir.z));
-	float d_accum = 1.0;
-	float light_accum = 0.0;
-	
-	// Trace ray through volume
-	for (int step=0; step<512; step++) {
-	// At each step, cast occlusion ray towards light source
-        float c_density = get_density(ray_pos, vd, volume);
-        float3 occ_pos = ray_pos;
-        ray_pos += ray_dir*step_size;
-        // Don't bother with occlusion ray if theres nothing there
-        if (c_density < 0.001) continue;
-		float occlusion = 1.0;
-		for (int occ=0; occ<512; occ++) {
-			occlusion *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
-			occ_pos += dir_to_light*step_size;
-		}
-		d_accum *= fmax(1.0-c_density,0.0);
-		light_accum += d_accum*c_density*occlusion;
-	}
+    int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
+    // Create Normalized UV image coordinates
+    float uvx = float(x)/float(img_dims.x)-0.5;
+    float uvy = float(y)/float(img_dims.y)-0.5;
+    uvx *= float(img_dims.x)/float(img_dims.y);     
 
-	const int pixel = 3*(y*img_dims.x+x);
-	image[pixel+0] = (uint8_t)(fmin(255.0*light_accum, 255.0));
-	image[pixel+1] = (uint8_t)(fmin(255.0*light_accum, 255.0));
-	image[pixel+2] = (uint8_t)(fmin(255.0*light_accum, 255.0));
+    // Set up ray originating from camera
+    float3 ray_pos = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
+    const float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
+    const float3 dir_to_light = normalize(
+        make_float3(light_dir.x, light_dir.y, light_dir.z));
+    float d_accum = 1.0;
+    float light_accum = 0.0;
+
+    // Trace ray through volume
+    for (int step=0; step<512; step++) {
+    // At each step, cast occlusion ray towards light source
+    float c_density = get_density(ray_pos, vd, volume);
+    float3 occ_pos = ray_pos;
+    ray_pos += ray_dir*step_size;
+    // Don't bother with occlusion ray if theres nothing there
+    if (c_density < 0.001) continue;
+        float occlusion = 1.0;
+        for (int occ=0; occ<512; occ++) {
+            occlusion *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
+            occ_pos += dir_to_light*step_size;
+        }
+        d_accum *= fmax(1.0-c_density,0.0);
+        light_accum += d_accum*c_density*occlusion;
+    }
+
+    const int pixel = 3*(y*img_dims.x+x);
+    image[pixel+0] = (uint8_t)(fmin(255.0*light_accum, 255.0));
+    image[pixel+1] = (uint8_t)(fmin(255.0*light_accum, 255.0));
+    image[pixel+2] = (uint8_t)(fmin(255.0*light_accum, 255.0));
 }
 
 void render_fluid(uint8_t *render_target, dims img_dims, 
-	float *d_volume /*pointer to gpu mem?*/, dims vol_dims, 
-	float step_size, fdims light_dir, fdims cam_pos, float rotation) {
+    float *d_volume /*pointer to gpu mem?*/, dims vol_dims, 
+    float step_size, fdims light_dir, fdims cam_pos, float rotation) {
 
-	float measured_time=0.0f;
-	cudaEvent_t start, stop;
-	cudaEventCreate( &start );
-	cudaEventCreate( &stop  );
+    float measured_time=0.0f;
+    cudaEvent_t start, stop;
+    cudaEventCreate( &start );
+    cudaEventCreate( &stop  );
 
-	dim3 block( 32, 32 );
-	dim3 grid( (img_dims.x+32-1)/32, (img_dims.y+32-1)/32 );
+    dim3 block( 32, 32 );
+    dim3 grid( (img_dims.x+32-1)/32, (img_dims.y+32-1)/32 );
 
-	cudaEventRecord( start, 0 );
-	
-	// Allocate device memory for image
-	int img_bytes = 3*sizeof(uint8_t)*img_dims.x*img_dims.y;
-	uint8_t *device_img;
-	cudaMalloc( (void**)&device_img, img_bytes );
+    cudaEventRecord( start, 0 );
+
+    // Allocate device memory for image
+    int img_bytes = 3*sizeof(uint8_t)*img_dims.x*img_dims.y;
+    uint8_t *device_img;
+        cudaMalloc( (void**)&device_img, img_bytes );
     if( 0 == device_img )
     {
         printf("couldn't allocate GPU memory\n");
-   		return;
+                return;
     }
 
-	render_pixel<<<grid,block>>>( 
-		device_img, d_volume, img_dims, vol_dims, 
-		step_size, light_dir, cam_pos, rotation);
+    render_pixel<<<grid,block>>>( 
+        device_img, d_volume, img_dims, vol_dims, 
+        step_size, light_dir, cam_pos, rotation);
 
-	// Read image back
-	cudaMemcpy( render_target, device_img, img_bytes, cudaMemcpyDeviceToHost );
+    // Read image back
+    cudaMemcpy( render_target, device_img, img_bytes, cudaMemcpyDeviceToHost );
 
-	cudaEventRecord( stop, 0 );
-	cudaThreadSynchronize();
-	cudaEventElapsedTime( &measured_time, start, stop );
+    cudaEventRecord( stop, 0 );
+    cudaThreadSynchronize();
+    cudaEventElapsedTime( &measured_time, start, stop );
 
-	cudaEventDestroy( start );
-	cudaEventDestroy( stop );
+    cudaEventDestroy( start );
+    cudaEventDestroy( stop );
 
-	std::cout << "Render Time: " << measured_time << "\n";
-	cudaFree(device_img);
+    std::cout << "Render Time: " << measured_time << "\n";
+    cudaFree(device_img);
 }
 
 int main(int argc, char* args[])
 {
 
-	dims vol_d;
-	vol_d.x = 512;
-	vol_d.y = 512;
-	vol_d.z = 512;
-	dims img_d;
-	img_d.x = 800;
-	img_d.y = 600;
+    dims vol_d;
+    vol_d.x = 512;
+    vol_d.y = 512;
+    vol_d.z = 512;
+    dims img_d;
+    img_d.x = 800;
+    img_d.y = 600;
 
-	fdims cam;
-	cam.x = static_cast<float>(vol_d.x)*0.5;
-	cam.y = static_cast<float>(vol_d.y)*0.5;
-	cam.z = 0.0;
-	fdims light;
-	light.x = -0.2;
-	light.y = -0.9;
-	light.z =  0.2;
+    fdims cam;
+    cam.x = static_cast<float>(vol_d.x)*0.5;
+    cam.y = static_cast<float>(vol_d.y)*0.5;
+    cam.z = 0.0;
+    fdims light;
+    light.x = -0.2;
+    light.y = -0.9;
+    light.z =  0.2;
 
-	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
+    uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
     int nelems =  vol_d.x*vol_d.y*vol_d.z;
     DoubleBuffer<float3> *velocity = new DoubleBuffer<float3>(nelems);
     DoubleBuffer<float> *density = new DoubleBuffer<float>(nelems);
 
-	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
-		dim3(8,8,8)>>>(density->writeTarget(), vol_d);
+    initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
+                dim3(8,8,8)>>>(density->writeTarget(), vol_d);
     density->swap();
 
     for (int f=0; f<=800; f++) {
