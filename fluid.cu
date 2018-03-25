@@ -211,24 +211,27 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     const float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
     const float3 dir_to_light = normalize(
         make_float3(light_dir.x, light_dir.y, light_dir.z));
+    const float occ_thresh = 0.001;
     float d_accum = 1.0;
     float light_accum = 0.0;
 
     // Trace ray through volume
     for (int step=0; step<512; step++) {
-    // At each step, cast occlusion ray towards light source
-    float c_density = get_density(ray_pos, vd, volume);
-    float3 occ_pos = ray_pos;
-    ray_pos += ray_dir*step_size;
-    // Don't bother with occlusion ray if theres nothing there
-    if (c_density < 0.001) continue;
-        float occlusion = 1.0;
+        // At each step, cast occlusion ray towards light source
+        float c_density = get_density(ray_pos, vd, volume);
+        float3 occ_pos = ray_pos;
+        ray_pos += ray_dir*step_size;
+        // Don't bother with occlusion ray if theres nothing there
+        if (c_density < occ_thresh) continue;
+        float transparency = 1.0;
         for (int occ=0; occ<512; occ++) {
-            occlusion *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
+            transparency *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
+            if (transparency < occ_thresh) break;
             occ_pos += dir_to_light*step_size;
         }
         d_accum *= fmax(1.0-c_density,0.0);
-        light_accum += d_accum*c_density*occlusion;
+        light_accum += d_accum*c_density*transparency;
+        if (d_accum < occ_thresh) break;
     }
 
     const int pixel = 3*(y*img_dims.x+x);
