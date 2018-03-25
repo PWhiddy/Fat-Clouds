@@ -91,11 +91,15 @@ inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
 }
 
-__device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx, 
-    dim3 thrIdx, int3 vd, float *shared, float *v_src) 
+inline __device__ float read_shared(float* mem, dim3 c, 
+    int3 blk_dim, int pad, int x, int y, int z)
 {
-    const int padding = 2; // How far to load past end of cube
-	const int sdim = blkDim.x+padding; // 10
+    return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
+}
+
+__device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx, 
+    dim3 thrIdx, int3 vd, int sdim, float *shared, float *v_src) 
+{
 	int t_idx = thrIdx.z*blkDim.y*blkDim.x 
 		+ thrIdx.y*blkDim.x + thrIdx.x; 
     // Load sdim*sdim*sdim cube of memory into shared array 
@@ -108,6 +112,7 @@ __device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx,
         sp = sp + blkDim*blkIdx - 1;
         shared[t_idx+cutoff] = get_density( sp, vd, v_src);
     }
+    /*
     __syncthreads();
     
     adjacent_cells aj;
@@ -121,24 +126,43 @@ __device__ adjacent_cells read_adjacent(dim3 blkDim, dim3 blkIdx,
     aj.zp = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
     aj.zn = shared[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
     return aj;
+    */
 }
 
 __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
 	__shared__ float loc[1024];
+    const int padding = 1; // How far to load past end of cube
+	const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
+    const int3 s_dims = make_int3(sdim, sdim, sdim);
 	const int x = blockDim.x*blockIdx.x+threadIdx.x;
 	const int y = blockDim.y*blockIdx.y+threadIdx.y;
 	const int z = blockDim.z*blockIdx.z+threadIdx.z;
     const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
-    adjacent_cells c = read_adjacent(
-        blockDim, blockIdx, threadIdx, vd, loc, v_src); 
+    /*adjacent_cells c = */load_shared(
+        blockDim, blockIdx, threadIdx, vd, sdim, loc, v_src); 
+    __syncthreads();
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    float o = 
+           read_shared(loc, threadIdx, s_dims, padding,  0,  0,  0);
+    float avg = 
+           read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
+    avg += read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
+    avg += read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
+    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0);
+    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
+    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1);
+    avg /= 6.0;
+    avg -= o;
 
+    /*
     float avg = (c.xp+c.xn+c.yp+c.yn+c.zp+c.zn)/6.0;
     avg = avg - c.o;
-    v_dst[ get_voxel(x,y,z, vd) ] = c.o + avg*amount;
+    */
+    v_dst[ get_voxel(x,y,z, vd) ] = o + avg*amount;
 }
 
 // Avoid reallocating volume buffer each step by swapping?
@@ -257,7 +281,7 @@ void render_fluid(uint8_t *render_target, dims img_dims,
 
 int main(int argc, char* args[])
 {
-	
+
 	dims vol_d;
 	vol_d.x = 512;
 	vol_d.y = 512;
@@ -277,6 +301,7 @@ int main(int argc, char* args[])
 
 	uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
     int nelems =  vol_d.x*vol_d.y*vol_d.z;
+    DoubleBuffer<float3> *velocity = new DoubleBuffer<float3>(nelems);
     DoubleBuffer<float> *density = new DoubleBuffer<float>(nelems);
 
 	initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
@@ -293,7 +318,8 @@ int main(int argc, char* args[])
         }
     }
 
-	delete[] img;
+    delete[] img;
+    delete velocity;
     delete density;
 
     printf("CUDA: %s\n", cudaGetErrorString( cudaGetLastError() ) );
