@@ -14,7 +14,7 @@ public:
     int byteCount();
     ~DoubleBuffer();
 private:
-    int nbytes;
+    int64_t nbytes;
     T* A;
     T* B;
 };
