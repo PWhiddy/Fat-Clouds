@@ -56,7 +56,8 @@ inline __device__ int get_voxel(int x, int y, int z, int3 d)
     return z*d.y*d.x + y*d.x + x;
 }
 
-inline __device__ float get_density(int3 c, int3 d, float* vol) {
+template <typename T>
+inline __device__ T get_density(int3 c, int3 d, T *vol) {
     if (c.x < 0 || c.y < 0 || c.z < 0 ||
         c.x >= d.x || c.y >= d.y || c.z >= d.z) {
     return 0.0;
@@ -65,8 +66,9 @@ inline __device__ float get_density(int3 c, int3 d, float* vol) {
     }
 }
 
-inline __device__ float get_density(float3 p, int3 d, float* vol) {
-    return get_density(make_int3(p), d, vol);
+template <typename T>
+inline __device__ T get_density(float3 p, int3 d, T *vol) {
+    return get_density<T>(make_int3(p), d, vol);
 }
    
 __global__ void initialize_volume(float *volume, dims vd)
@@ -91,7 +93,7 @@ inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
 }
 
-inline __device__ float read_shared(float* mem, dim3 c, 
+inline __device__ float read_shared(float *mem, dim3 c, 
     int3 blk_dim, int pad, int x, int y, int z)
 {
     return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
@@ -114,7 +116,7 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
     }
 }
 
-__global__ void advection(float *v_src, float *v_dst, dims vol_dims, float amount)
+__global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
     __shared__ float loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -146,6 +148,27 @@ __global__ void advection(float *v_src, float *v_dst, dims vol_dims, float amoun
     v_dst[ get_voxel(x,y,z, vd) ] = o + avg*amount;
 }
 
+template <typename V, typename T>
+__global__ void advection(V *velocity, T *source, T *dest, dims vol_dims, 
+    float time_step, float dissipation)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    float3 p = make_float3(float(x),float(y),float(z));
+
+    V vel = velocity[ get_voxel(x,y,z,vd) ];
+    float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
+
+    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_density(np, vd, source) //////;
+}
+
+
+
 // Avoid reallocating volume buffer each step by swapping?
 void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 {
@@ -161,7 +184,7 @@ void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 
     cudaEventRecord( start, 0 );
         
-    advection<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
+    pressure_solve<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
 
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
