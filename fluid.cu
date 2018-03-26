@@ -149,6 +149,38 @@ __global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float 
 }
 
 template <typename V, typename T>
+__global__ void divergence(V *velocity, T *div, dims vol_dims)
+{
+    __shared__ float loc[1024];
+    const int padding = 1; // How far to load past end of cube
+    const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
+    const int3 s_dims = make_int3(sdim, sdim, sdim);
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
+
+    load_shared(
+        blockDim, blockIdx, threadIdx, vd, sdim, loc, velocity); 
+    __syncthreads();
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    T d = 
+         read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
+    d -= read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
+    d += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0);
+    d -= read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
+    d += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1);
+    d -= read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
+    d *= 0.5;
+
+    div[ get_voxel(x,y,z, vd) ] = d;
+}
+
+
+
+template <typename V, typename T>
 __global__ void advection(V *velocity, T *source, T *dest, dims vol_dims, 
     float time_step, float dissipation)
 {
