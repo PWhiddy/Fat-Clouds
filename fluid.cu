@@ -93,12 +93,14 @@ inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
 }
 
+// make this templated
 inline __device__ float read_shared(float *mem, dim3 c, 
     int3 blk_dim, int pad, int x, int y, int z)
 {
     return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
 }
 
+// make this templated
 __device__ void load_shared(dim3 blkDim, dim3 blkIdx, 
     dim3 thrIdx, int3 vd, int sdim, float *shared, float *v_src) 
 {
@@ -116,6 +118,7 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
     }
 }
 
+// make this templated
 __global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
     __shared__ float loc[1024];
@@ -151,7 +154,7 @@ __global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float 
 template <typename V, typename T>
 __global__ void divergence(V *velocity, T *div, dims vol_dims)
 {
-    __shared__ float loc[1024];
+    __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
     const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
     const int3 s_dims = make_int3(sdim, sdim, sdim);
@@ -178,7 +181,40 @@ __global__ void divergence(V *velocity, T *div, dims vol_dims)
     div[ get_voxel(x,y,z, vd) ] = d;
 }
 
+template <typename V, typename T>
+__global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure, 
+    dims vol_dims, float grad_scale)
+{
+    __shared__ V loc[1024];
+    const int padding = 1; // How far to load past end of cube
+    const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
+    const int3 s_dims = make_int3(sdim, sdim, sdim);
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
+    load_shared(
+        blockDim, blockIdx, threadIdx, vd, sdim, loc, pressure); 
+    __syncthreads();
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    V old_v = get_density(make_int3(x,y,z), vd, v_src);
+
+    V grad;
+    grad.x = 
+        read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0) - 
+        read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
+    grad.y =
+        read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0) -
+        read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
+    grad.z = 
+        read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1) -
+        read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
+
+    v_dest[ get_voxel(x,y,z, vd) ] = old_v - grad*grad_scale;
+}
 
 template <typename V, typename T>
 __global__ void advection(V *velocity, T *source, T *dest, dims vol_dims, 
@@ -198,8 +234,6 @@ __global__ void advection(V *velocity, T *source, T *dest, dims vol_dims,
 
     dest[ get_voxel(x,y,z, vd) ] = dissipation * get_density(np, vd, source) //////;
 }
-
-
 
 // Avoid reallocating volume buffer each step by swapping?
 void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
