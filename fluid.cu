@@ -97,7 +97,7 @@ inline __device__ float read_shared(float* mem, dim3 c,
     return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
 }
 
-__device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx, 
+__device__ void load_shared(dim3 blkDim, dim3 blkIdx, 
     dim3 thrIdx, int3 vd, int sdim, float *shared, float *v_src) 
 {
     int t_idx = thrIdx.z*blkDim.y*blkDim.x 
@@ -112,24 +112,9 @@ __device__ void /*adjacent_cells*/ load_shared(dim3 blkDim, dim3 blkIdx,
         sp = sp + blkDim*blkIdx - 1;
         shared[t_idx+cutoff] = get_density( sp, vd, v_src);
     }
-    /*
-    __syncthreads();
-    
-    adjacent_cells aj;
-    int3 sc = make_int3( thrIdx.x, thrIdx.y, thrIdx.z );
-    int3 blk_dim = make_int3(sdim, sdim, sdim);
-    aj.o  = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+1, blk_dim) ];
-        aj.yp = shared[ get_voxel(sc.x+1,sc.y+2,sc.z+1, blk_dim) ];
-    aj.yn = shared[ get_voxel(sc.x+1,sc.y  ,sc.z+1, blk_dim) ];
-    aj.xn = shared[ get_voxel(sc.x  ,sc.y+1,sc.z+1, blk_dim) ];
-    aj.xp = shared[ get_voxel(sc.x+2,sc.y+1,sc.z+1, blk_dim) ];
-    aj.zp = shared[ get_voxel(sc.x+1,sc.y+1,sc.z+2, blk_dim) ];
-    aj.zn = shared[ get_voxel(sc.x+1,sc.y+1,sc.z  , blk_dim) ];
-    return aj;
-    */
 }
 
-__global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amount)
+__global__ void advection(float *v_src, float *v_dst, dims vol_dims, float amount)
 {
     __shared__ float loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -140,7 +125,7 @@ __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amoun
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
     const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
-    /*adjacent_cells c = */load_shared(
+    load_shared(
         blockDim, blockIdx, threadIdx, vd, sdim, loc, v_src); 
     __syncthreads();
 
@@ -158,10 +143,6 @@ __global__ void diffusion(float *v_src, float *v_dst, dims vol_dims, float amoun
     avg /= 6.0;
     avg -= o;
 
-    /*
-    float avg = (c.xp+c.xn+c.yp+c.yn+c.zp+c.zn)/6.0;
-    avg = avg - c.o;
-    */
     v_dst[ get_voxel(x,y,z, vd) ] = o + avg*amount;
 }
 
@@ -180,7 +161,7 @@ void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 
     cudaEventRecord( start, 0 );
         
-    diffusion<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
+    advection<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
 
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
