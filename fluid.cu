@@ -217,7 +217,7 @@ __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure,
 }
 
 template <typename V, typename T>
-__global__ void advection(V *velocity, T *source, T *dest, dims vol_dims, 
+__global__ void advection( V *velocity, T *source, T *dest, dims vol_dims, 
     float time_step, float dissipation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
@@ -232,10 +232,31 @@ __global__ void advection(V *velocity, T *source, T *dest, dims vol_dims,
     V vel = velocity[ get_voxel(x,y,z,vd) ];
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
 
-    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_density(np, vd, source) //////;
+    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_density(np, vd, source);
 }
 
-// Avoid reallocating volume buffer each step by swapping?
+template <typename T>
+__global__ void impulse( T *target, float xp, float yp, float zp, 
+    float radius, T val)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    float3 p = make_float3(float(x),float(y),float(z));
+    
+    float dist = sqrt(pow(p.x-xp,2.0)+pow(p.y-yp,2.0)+pow(p.z-zp,2.0));
+
+    if (dist < radius) {
+        target[ get_voxel(x,y,z, vd) ] = val;
+    }
+}
+
+// void time_kernel(void *kernel, grid, block, params) ?? 
+
 void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 {
 
