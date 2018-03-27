@@ -8,11 +8,6 @@
 #include "cutil_math.h"
 #include "double_buffer.cpp"
 
-// Same as a dim3
-struct dims {
-    int x, y, z;
-};
-
 std::string pad_number(int n)
 {
     std::ostringstream ss;
@@ -20,7 +15,7 @@ std::string pad_number(int n)
     return ss.str();
 }
 
-void save_image(uint8_t *pixels, dims img_dims, std::string name) {
+void save_image(uint8_t *pixels, int3 img_dims, std::string name) {
     std::ofstream file(name, std::ofstream::binary);
     if (file.is_open()) {
         file << "P6\n" << img_dims.x << " " << img_dims.y << "\n" << "255\n";
@@ -59,7 +54,7 @@ inline __device__ T get_cell(float3 p, int3 d, T *vol) {
     return get_cell<T>(make_int3(p), d, vol);
 }
    
-__global__ void initialize_volume(float *volume, dims vd)
+__global__ void initialize_volume(float *volume, int3 vd)
 {
     int x = blockDim.x*blockIdx.x+threadIdx.x;
     int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -107,7 +102,7 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
 }
 
 template <typename T>
-__global__ void pressure_solve(T *v_src, T *v_dst, dims vol_dims, float amount)
+__global__ void pressure_solve(T *v_src, T *v_dst, int3 vol_dims, float amount)
 {
     __shared__ T loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -140,7 +135,7 @@ __global__ void pressure_solve(T *v_src, T *v_dst, dims vol_dims, float amount)
 }
 
 template <typename V, typename T>
-__global__ void divergence(V *velocity, T *div, dims vol_dims)
+__global__ void divergence(V *velocity, T *div, int3 vol_dims)
 {
     __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -171,7 +166,7 @@ __global__ void divergence(V *velocity, T *div, dims vol_dims)
 
 template <typename V, typename T>
 __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure, 
-    dims vol_dims, float grad_scale)
+    int3 vol_dims, float grad_scale)
 {
     __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -205,7 +200,7 @@ __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure,
 }
 
 template <typename V, typename T>
-__global__ void advection( V *velocity, T *source, T *dest, dims vol_dims, 
+__global__ void advection( V *velocity, T *source, T *dest, int3 vol_dims, 
     float time_step, float dissipation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
@@ -225,7 +220,7 @@ __global__ void advection( V *velocity, T *source, T *dest, dims vol_dims,
 
 template <typename T>
 __global__ void impulse( T *target, float xp, float yp, float zp, 
-    float radius, T val, dims vol_dims)
+    float radius, T val, int3 vol_dims)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -244,7 +239,7 @@ __global__ void impulse( T *target, float xp, float yp, float zp,
 }
 
 template <typename T>
-__global__ void clear( T *target, T val, dims vol_dims)
+__global__ void clear( T *target, T val, int3 vol_dims)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -258,7 +253,7 @@ __global__ void clear( T *target, T val, dims vol_dims)
 
 // void time_kernel(void *kernel, grid, block, params) ?? 
 
-void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
+void simulate_fluid(float *v_src, float *v_dst, int3 vol_dim, float time_step)
 {
 
     float measured_time=0.0f;
@@ -285,7 +280,7 @@ void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
-        dims img_dims, dims vol_dims, float step_size, 
+        int3 img_dims, int3 vol_dims, float step_size, 
         float3 light_dir, float3 cam_pos, float rotation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
@@ -331,8 +326,8 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     image[pixel+2] = (uint8_t)(fmin(255.0*light_accum, 255.0));
 }
 
-void render_fluid(uint8_t *render_target, dims img_dims, 
-    float *d_volume /*pointer to gpu mem?*/, dims vol_dims, 
+void render_fluid(uint8_t *render_target, int3 img_dims, 
+    float *d_volume /*pointer to gpu mem?*/, int3 vol_dims, 
     float step_size, float3 light_dir, float3 cam_pos, float rotation) {
 
     float measured_time=0.0f;
@@ -376,11 +371,11 @@ void render_fluid(uint8_t *render_target, dims img_dims,
 int main(int argc, char* args[])
 {
 
-    dims vol_d;
+    int3 vol_d;
     vol_d.x = 512;
     vol_d.y = 512;
     vol_d.z = 512;
-    dims img_d;
+    int3 img_d;
     img_d.x = 800;
     img_d.y = 600;
 
