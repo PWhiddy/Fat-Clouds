@@ -80,7 +80,44 @@ inline __device__ T get_cell(int3 c, int3 d, T *vol) {
 
 template <typename T>
 inline __device__ T get_cell(float3 p, int3 d, T *vol) {
-    return get_cell<T>(make_int3(p), d, vol);
+    
+    // bilinear interpolation
+    float3 l = floor(p);
+    int3 rp = make_int3(l);
+    float3 dif = p-l;
+    float sum = 0.0;
+
+    #pragma unroll
+    for (int a=0; a<=1; a++) 
+    {
+        #pragma unroll
+        for (int b=0; b<=1; b++)
+        {
+            #pragma unroll
+            for (int c=0; c<=1; c++)
+            {
+                sum += abs(float(1-a)-dif.x) *
+                       abs(float(1-b)-dif.y) *
+                       abs(float(1-c)-dif.z) *
+                    get_cell( make_int3( rp.x+a, rp.y+b, rp.z+c ), d, vol);
+            }
+        }
+    }
+
+    /*
+    sum += (1.0-d.x)*(1.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x,   b.y,   b.z   ), d, vol);
+    sum += (0.0-d.x)*(1.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x+1, b.y,   b.z   ), d, vol);
+    sum += (1.0-d.x)*(0.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x,   b.y+1, b.z   ), d, vol);
+    sum += (1.0-d.x)*(1.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x,   b.y,   b.z+1 ), d, vol);
+    sum += (0.0-d.x)*(0.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x+1, b.y+1, b.z   ), d, vol);
+    sum += (1.0-d.x)*(0.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x,   b.y+1, b.z+1 ), d, vol);
+    sum += (0.0-d.x)*(1.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x+1, b.y,   b.z+1 ), d, vol);
+    sum += (0.0-d.x)*(0.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x+1, b.y+1, b.z+1 ), d, vol);
+    */
+
+    return sum;
+
+    //return get_cell<T>(make_int3(p), d, vol);
 }
    
 __global__ void initialize_volume(float *volume, int3 vd)
@@ -242,7 +279,9 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vol_dims,
     float3 p = make_float3(float(x),float(y),float(z));
 
     V vel = velocity[ get_voxel(x,y,z,vd) ];
+
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
+    
 
     dest[ get_voxel(x,y,z, vd) ] = dissipation * get_cell(np, vd, source);
 }
@@ -300,6 +339,12 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.density->readTarget(),
             state.density->writeTarget(), 
             vol_dim, time_step);
+
+    advection<<<grid,block>>>( 
+            state.velocity->readTarget(), 
+            state.density->readTarget(), 
+            state.density->writeTarget(), 
+            vol_dim, time_step, 1.0);
 
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
@@ -419,16 +464,35 @@ int main(int argc, char* args[])
    
     fluid_state state(vol_d);
 
-    initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
-                dim3(8,8,8)>>>(state.density->writeTarget(), vol_d);
+    dim3 full_grid(vol_d.x/8, vol_d.y/8, vol_d.z/8);
+    dim3 full_block(8,8,8);
+    
+    initialize_volume<<<full_grid, full_block>>>
+        (state.density->writeTarget(), vol_d);
+    
     state.density->swap();
 
+    // zero out velocity
+    impulse<<<full_grid, full_block>>>( state.velocity->writeTarget(), 
+        0.0, 0.0, 0.0, 100000.0, make_float3(0.0), vol_d);
+
+    // initial velocity
+    impulse<<<full_grid, full_block>>>( state.velocity->writeTarget(), 
+        256.0, 256.0, 256.0, 150.0, make_float3(0.0,-0.05,0.0), vol_d);
+    state.velocity->swap();
+
     for (int f=0; f<=800; f++) {
+        
         std::cout << "Step " << f+1 << "\n";
-        render_fluid(img, img_d, state.density->readTarget(), vol_d, 1.0, light, cam, 0.0);
+        
+        render_fluid(
+                img, img_d, 
+                state.density->readTarget(), 
+                vol_d, 1.0, light, cam, 0.0);
+
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
-        for (int st=0; st<30; st++) {
-            simulate_fluid(state, vol_d, 0.7);
+        for (int st=0; st<10; st++) {
+            simulate_fluid(state, vol_d, 1.0);
             state.density->swap();
         }
     }
