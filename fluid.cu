@@ -114,12 +114,12 @@ __global__ void initialize_volume(float *volume, int3 vd)
     int z = blockDim.z*blockIdx.z+threadIdx.z;
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     const float width = 24.0;
-    const float den = 0.018;
+    const float den = 0.058;
     float dx = float(x-vd.x/2);
     float dy = float(y-vd.y/2);
     float dz = float(z-vd.z/2);
     float dist = sqrtf(dx*dx+dy*dy+dz*dz);
-    float density = den/(1.0+pow(1.2,dist-width));
+    float density = den/(1.0+pow(1.8,dist-width));
     volume[ get_voxel( x, y, z, make_int3(vd.x, vd.y, vd.z)) ] 
         = density;
 }
@@ -269,7 +269,6 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vol_dims,
 
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
     
-
     dest[ get_voxel(x,y,z, vd) ] = dissipation * get_cell(np, vd, source);
 }
 
@@ -325,14 +324,16 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
     pressure_solve<<<grid,block>>>( 
             state.density->readTarget(),
             state.density->writeTarget(), 
-            vol_dim, time_step);
+            vol_dim, 0.7);
+    
+    state.density->swap();
 
     advection<<<grid,block>>>( 
             state.velocity->readTarget(), 
             state.density->readTarget(), 
             state.density->writeTarget(), 
             vol_dim, time_step, 1.0);
-
+    
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
     cudaEventElapsedTime( &measured_time, start, stop );
@@ -340,7 +341,7 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
     cudaEventDestroy( start );
     cudaEventDestroy( stop );
 
-    std::cout << "Simulation Time: " << measured_time << "\n";
+    //std::cout << "Simulation Time: " << measured_time << "\n";
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
@@ -451,7 +452,7 @@ int main(int argc, char* args[])
    
     fluid_state state(vol_d);
 
-    dim3 full_grid(vol_d.x/8, vol_d.y/8, vol_d.z/8);
+    dim3 full_grid(vol_d.x/8+1, vol_d.y/8+1, vol_d.z/8+1);
     dim3 full_block(8,8,8);
     
     initialize_volume<<<full_grid, full_block>>>
@@ -465,7 +466,7 @@ int main(int argc, char* args[])
 
     // initial velocity
     impulse<<<full_grid, full_block>>>( state.velocity->writeTarget(), 
-        256.0, 256.0, 256.0, 150.0, make_float3(0.0,-0.05,0.0), vol_d);
+        256.0, 256.0, 256.0, 150.0, make_float3(0.0,-0.1,0.0), vol_d);
     state.velocity->swap();
 
     for (int f=0; f<=800; f++) {
@@ -478,7 +479,7 @@ int main(int argc, char* args[])
                 vol_d, 1.0, light, cam, 0.0);
 
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
-        for (int st=0; st<10; st++) {
+        for (int st=0; st<5; st++) {
             simulate_fluid(state, vol_d, 1.0);
             state.density->swap();
         }
