@@ -155,7 +155,8 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
 }
 
 template <typename T>
-__global__ void pressure_solve(T *v_src, T *v_dst, int3 vol_dims, float amount)
+__global__ void pressure_solve(T *div, T *p_src, T *p_dst, 
+        int3 vd, float amount)
 {
     __shared__ T loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -164,31 +165,30 @@ __global__ void pressure_solve(T *v_src, T *v_dst, int3 vol_dims, float amount)
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     load_shared(
-        blockDim, blockIdx, threadIdx, vd, sdim, loc, v_src); 
+        blockDim, blockIdx, threadIdx, vd, sdim, loc, p_src); 
     __syncthreads();
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
-    T o = 
-           read_shared(loc, threadIdx, s_dims, padding,  0,  0,  0);
-    T avg = 
-           read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
-    avg += read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
-    avg += read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
-    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0);
-    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
-    avg += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1);
-    avg /= 6.0;
-    avg -= o;
+    T d = div[get_voxel(x,y,z, vd)];
 
-    v_dst[ get_voxel(x,y,z, vd) ] = o + avg*amount;
+    T p_sum = 
+             read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
+    p_sum += read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
+    p_sum += read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
+    p_sum += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0);
+    p_sum += read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
+    p_sum += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1);
+    //avg /= 6.0;
+    //avg -= o;
+
+    p_dst[ get_voxel(x,y,z, vd) ] = (p_sum+0.5*d)*0.166667;//o + avg*amount;
 }
 
 template <typename V, typename T>
-__global__ void divergence(V *velocity, T *div, int3 vol_dims)
+__global__ void divergence(V *velocity, T *div, int3 vd)
 {
     __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -197,7 +197,6 @@ __global__ void divergence(V *velocity, T *div, int3 vol_dims)
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     load_shared(
         blockDim, blockIdx, threadIdx, vd, sdim, loc, velocity); 
@@ -219,7 +218,7 @@ __global__ void divergence(V *velocity, T *div, int3 vol_dims)
 
 template <typename V, typename T>
 __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure, 
-    int3 vol_dims, float grad_scale)
+    int3 vd, float grad_scale)
 {
     __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -228,7 +227,6 @@ __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure,
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     load_shared(
         blockDim, blockIdx, threadIdx, vd, sdim, loc, pressure); 
@@ -253,13 +251,12 @@ __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure,
 }
 
 template <typename V, typename T>
-__global__ void advection( V *velocity, T *source, T *dest, int3 vol_dims, 
+__global__ void advection( V *velocity, T *source, T *dest, int3 vd, 
     float time_step, float dissipation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
@@ -274,12 +271,11 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vol_dims,
 
 template <typename T>
 __global__ void impulse( T *target, float xp, float yp, float zp, 
-    float radius, T val, int3 vol_dims)
+    float radius, T val, int3 vd)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
     const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
@@ -292,6 +288,29 @@ __global__ void impulse( T *target, float xp, float yp, float zp,
     }
 }
 
+template <typename V, typename T>
+__global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest, 
+    float amb_temp, float time_step, float sig, float kap, int3 vd)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+   
+    T temp = t_src[ get_voxel(x,y,z, vd)];
+    V vel = v_src[ get_voxel(x,y,z, vd)];
+
+    if (temp > amb_temp)
+    {
+        T dense = d_src[ get_voxel(x,y,z, vd)];
+        vel.y += (time_step * (temp - amb_temp) * sig - dense * kap);
+    }
+    
+    v_dest[ get_voxel(x,y,z, vd)] = vel;
+}
+
+/*
 template <typename T>
 __global__ void clear( T *target, T val, int3 vol_dims)
 {
@@ -304,6 +323,7 @@ __global__ void clear( T *target, T val, int3 vol_dims)
 
     target[ get_voxel(x,y,z, vd) ] = val;
 }
+*/
 
 // void time_kernel(void *kernel, grid, block, params) ?? 
 
@@ -322,6 +342,7 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
     cudaEventRecord( start, 0 );
         
     pressure_solve<<<grid,block>>>( 
+            state.diverge,
             state.density->readTarget(),
             state.density->writeTarget(), 
             vol_dim, 0.7);
