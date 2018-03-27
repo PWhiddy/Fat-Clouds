@@ -8,6 +8,35 @@
 #include "cutil_math.h"
 #include "double_buffer.cpp"
 
+struct fluid_state {
+
+    int3 dimensions;
+    int64_t nelems;
+    DoubleBuffer<float3> *velocity;
+    DoubleBuffer<float> *density;
+    DoubleBuffer<float> *temperature;
+    DoubleBuffer<float> *pressure;
+    float *diverge;
+
+    fluid_state(int3 dims) {
+        dimensions = dims;
+        nelems = dims.x*dims.y*dims.z;
+        velocity = new DoubleBuffer<float3>(nelems);
+        density = new DoubleBuffer<float>(nelems);
+        temperature = new DoubleBuffer<float>(nelems);
+        pressure = new DoubleBuffer<float>(nelems);
+        cudaMalloc( (void**) &diverge, sizeof(float)*nelems);
+    }
+
+    ~fluid_state() {
+        delete velocity;
+        delete density;
+        delete temperature;
+        delete pressure;
+        cudaFree(diverge);
+    }
+};
+
 std::string pad_number(int n)
 {
     std::ostringstream ss;
@@ -253,7 +282,7 @@ __global__ void clear( T *target, T val, int3 vol_dims)
 
 // void time_kernel(void *kernel, grid, block, params) ?? 
 
-void simulate_fluid(float *v_src, float *v_dst, int3 vol_dim, float time_step)
+void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
 {
 
     float measured_time=0.0f;
@@ -267,7 +296,10 @@ void simulate_fluid(float *v_src, float *v_dst, int3 vol_dim, float time_step)
 
     cudaEventRecord( start, 0 );
         
-    pressure_solve<<<grid,block>>>( v_src, v_dst, vol_dim, time_step);
+    pressure_solve<<<grid,block>>>( 
+            state.density->readTarget(),
+            state.density->writeTarget(), 
+            vol_dim, time_step);
 
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
@@ -371,13 +403,8 @@ void render_fluid(uint8_t *render_target, int3 img_dims,
 int main(int argc, char* args[])
 {
 
-    int3 vol_d;
-    vol_d.x = 512;
-    vol_d.y = 512;
-    vol_d.z = 512;
-    int3 img_d;
-    img_d.x = 800;
-    img_d.y = 600;
+    const int3 vol_d = make_int3(512,512,512);
+    const int3 img_d = make_int3(800,600,0);
 
     float3 cam;
     cam.x = static_cast<float>(vol_d.x)*0.5;
@@ -389,27 +416,24 @@ int main(int argc, char* args[])
     light.z =  0.2;
 
     uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
-    int nelems =  vol_d.x*vol_d.y*vol_d.z;
-    DoubleBuffer<float3> *velocity = new DoubleBuffer<float3>(nelems);
-    DoubleBuffer<float> *density = new DoubleBuffer<float>(nelems);
+   
+    fluid_state state(vol_d);
 
     initialize_volume<<<dim3(vol_d.x/8, vol_d.y/8, vol_d.z/8), 
-                dim3(8,8,8)>>>(density->writeTarget(), vol_d);
-    density->swap();
+                dim3(8,8,8)>>>(state.density->writeTarget(), vol_d);
+    state.density->swap();
 
     for (int f=0; f<=800; f++) {
         std::cout << "Step " << f+1 << "\n";
-        render_fluid(img, img_d, density->readTarget(), vol_d, 1.0, light, cam, 0.0);
+        render_fluid(img, img_d, state.density->readTarget(), vol_d, 1.0, light, cam, 0.0);
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
         for (int st=0; st<30; st++) {
-            simulate_fluid(density->readTarget(), density->writeTarget(), vol_d, 0.7);
-            density->swap();
+            simulate_fluid(state, vol_d, 0.7);
+            state.density->swap();
         }
     }
 
     delete[] img;
-    delete velocity;
-    delete density;
 
     printf("CUDA: %s\n", cudaGetErrorString( cudaGetLastError() ) );
 
