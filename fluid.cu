@@ -104,20 +104,7 @@ inline __device__ T get_cell(float3 p, int3 d, T *vol) {
         }
     }
 
-    /*
-    sum += (1.0-d.x)*(1.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x,   b.y,   b.z   ), d, vol);
-    sum += (0.0-d.x)*(1.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x+1, b.y,   b.z   ), d, vol);
-    sum += (1.0-d.x)*(0.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x,   b.y+1, b.z   ), d, vol);
-    sum += (1.0-d.x)*(1.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x,   b.y,   b.z+1 ), d, vol);
-    sum += (0.0-d.x)*(0.0-d.y)*(1.0-d.z) * get_cell( make_int3( b.x+1, b.y+1, b.z   ), d, vol);
-    sum += (1.0-d.x)*(0.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x,   b.y+1, b.z+1 ), d, vol);
-    sum += (0.0-d.x)*(1.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x+1, b.y,   b.z+1 ), d, vol);
-    sum += (0.0-d.x)*(0.0-d.y)*(0.0-d.z) * get_cell( make_int3( b.x+1, b.y+1, b.z+1 ), d, vol);
-    */
-
     return sum;
-
-    //return get_cell<T>(make_int3(p), d, vol);
 }
    
 __global__ void initialize_volume(float *volume, int3 vd)
@@ -126,7 +113,7 @@ __global__ void initialize_volume(float *volume, int3 vd)
     int y = blockDim.y*blockIdx.y+threadIdx.y;
     int z = blockDim.z*blockIdx.z+threadIdx.z;
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-    const float width = 128.0;
+    const float width = 24.0;
     const float den = 0.018;
     float dx = float(x-vd.x/2);
     float dy = float(y-vd.y/2);
