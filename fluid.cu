@@ -4,25 +4,13 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <cuda_fp16.h>
 #include "cutil_math.h"
 #include "double_buffer.cpp"
 
 // Same as a dim3
 struct dims {
     int x, y, z;
-};
-
-struct fdims {
-    float x, y, z;
-};
-
-// Stores value contained in a cell as well
-// as the values of cells adjacent to it
-struct adjacent_cells {
-    float o,
-    xn, xp,
-    yn, yp,
-    zn, zp;      
 };
 
 std::string pad_number(int n)
@@ -57,7 +45,7 @@ inline __device__ int get_voxel(int x, int y, int z, int3 d)
 }
 
 template <typename T>
-inline __device__ T get_density(int3 c, int3 d, T *vol) {
+inline __device__ T get_cell(int3 c, int3 d, T *vol) {
     if (c.x < 0 || c.y < 0 || c.z < 0 ||
         c.x >= d.x || c.y >= d.y || c.z >= d.z) {
     return 0.0;
@@ -67,8 +55,8 @@ inline __device__ T get_density(int3 c, int3 d, T *vol) {
 }
 
 template <typename T>
-inline __device__ T get_density(float3 p, int3 d, T *vol) {
-    return get_density<T>(make_int3(p), d, vol);
+inline __device__ T get_cell(float3 p, int3 d, T *vol) {
+    return get_cell<T>(make_int3(p), d, vol);
 }
    
 __global__ void initialize_volume(float *volume, dims vd)
@@ -93,16 +81,16 @@ inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
 }
 
-// make this templated
-inline __device__ float read_shared(float *mem, dim3 c, 
+template <typename T>
+inline __device__ float read_shared(T *mem, dim3 c, 
     int3 blk_dim, int pad, int x, int y, int z)
 {
     return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
 }
 
-// make this templated
+template <typename T>
 __device__ void load_shared(dim3 blkDim, dim3 blkIdx, 
-    dim3 thrIdx, int3 vd, int sdim, float *shared, float *v_src) 
+    dim3 thrIdx, int3 vd, int sdim, T *shared, T *src) 
 {
     int t_idx = thrIdx.z*blkDim.y*blkDim.x 
         + thrIdx.y*blkDim.x + thrIdx.x; 
@@ -111,17 +99,17 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
     if (t_idx < cutoff) {
         int3 sp = mod_coords(t_idx, sdim);
         sp = sp + blkDim*blkIdx - 1;
-        shared[t_idx] = get_density( sp, vd, v_src);
+        shared[t_idx] = get_cell( sp, vd, src);
         sp = mod_coords(t_idx+cutoff, sdim);
         sp = sp + blkDim*blkIdx - 1;
-        shared[t_idx+cutoff] = get_density( sp, vd, v_src);
+        shared[t_idx+cutoff] = get_cell( sp, vd, src);
     }
 }
 
-// make this templated
-__global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float amount)
+template <typename T>
+__global__ void pressure_solve(T *v_src, T *v_dst, dims vol_dims, float amount)
 {
-    __shared__ float loc[1024];
+    __shared__ T loc[1024];
     const int padding = 1; // How far to load past end of cube
     const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
     const int3 s_dims = make_int3(sdim, sdim, sdim);
@@ -136,9 +124,9 @@ __global__ void pressure_solve(float *v_src, float *v_dst, dims vol_dims, float 
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
-    float o = 
+    T o = 
            read_shared(loc, threadIdx, s_dims, padding,  0,  0,  0);
-    float avg = 
+    T avg = 
            read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
     avg += read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
     avg += read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
@@ -200,7 +188,7 @@ __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure,
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
-    V old_v = get_density(make_int3(x,y,z), vd, v_src);
+    V old_v = get_cell(make_int3(x,y,z), vd, v_src);
 
     V grad;
     grad.x = 
@@ -232,12 +220,12 @@ __global__ void advection( V *velocity, T *source, T *dest, dims vol_dims,
     V vel = velocity[ get_voxel(x,y,z,vd) ];
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
 
-    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_density(np, vd, source);
+    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_cell(np, vd, source);
 }
 
 template <typename T>
 __global__ void impulse( T *target, float xp, float yp, float zp, 
-    float radius, T val)
+    float radius, T val, dims vol_dims)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -253,6 +241,19 @@ __global__ void impulse( T *target, float xp, float yp, float zp,
     if (dist < radius) {
         target[ get_voxel(x,y,z, vd) ] = val;
     }
+}
+
+template <typename T>
+__global__ void clear( T *target, T val, dims vol_dims)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+
+    target[ get_voxel(x,y,z, vd) ] = val;
 }
 
 // void time_kernel(void *kernel, grid, block, params) ?? 
@@ -285,7 +286,7 @@ void simulate_fluid(float *v_src, float *v_dst, dims vol_dim, float time_step)
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
         dims img_dims, dims vol_dims, float step_size, 
-        fdims light_dir, fdims cam_pos, float rotation)
+        float3 light_dir, float3 cam_pos, float rotation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -298,10 +299,9 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     uvx *= float(img_dims.x)/float(img_dims.y);     
 
     // Set up ray originating from camera
-    float3 ray_pos = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
+    float3 ray_pos = cam_pos;
     const float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
-    const float3 dir_to_light = normalize(
-        make_float3(light_dir.x, light_dir.y, light_dir.z));
+    const float3 dir_to_light = normalize(light_dir);
     const float occ_thresh = 0.001;
     float d_accum = 1.0;
     float light_accum = 0.0;
@@ -309,14 +309,14 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     // Trace ray through volume
     for (int step=0; step<512; step++) {
         // At each step, cast occlusion ray towards light source
-        float c_density = get_density(ray_pos, vd, volume);
+        float c_density = get_cell(ray_pos, vd, volume);
         float3 occ_pos = ray_pos;
         ray_pos += ray_dir*step_size;
         // Don't bother with occlusion ray if theres nothing there
         if (c_density < occ_thresh) continue;
         float transparency = 1.0;
         for (int occ=0; occ<512; occ++) {
-            transparency *= fmax(1.0-get_density(occ_pos, vd, volume),0.0);
+            transparency *= fmax(1.0-get_cell(occ_pos, vd, volume),0.0);
             if (transparency < occ_thresh) break;
             occ_pos += dir_to_light*step_size;
         }
@@ -333,7 +333,7 @@ __global__ void render_pixel( uint8_t *image, float *volume,
 
 void render_fluid(uint8_t *render_target, dims img_dims, 
     float *d_volume /*pointer to gpu mem?*/, dims vol_dims, 
-    float step_size, fdims light_dir, fdims cam_pos, float rotation) {
+    float step_size, float3 light_dir, float3 cam_pos, float rotation) {
 
     float measured_time=0.0f;
     cudaEvent_t start, stop;
@@ -384,11 +384,11 @@ int main(int argc, char* args[])
     img_d.x = 800;
     img_d.y = 600;
 
-    fdims cam;
+    float3 cam;
     cam.x = static_cast<float>(vol_d.x)*0.5;
     cam.y = static_cast<float>(vol_d.y)*0.5;
     cam.z = 0.0;
-    fdims light;
+    float3 light;
     light.x = -0.2;
     light.y = -0.9;
     light.z =  0.2;
