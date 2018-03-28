@@ -10,6 +10,11 @@
 
 struct fluid_state {
 
+    float3 impulseLoc;
+    float impulseTemp;
+    float impulseDensity;
+    float cell_size;
+    float time_step;
     int3 dimensions;
     int64_t nelems;
     DoubleBuffer<float3> *velocity;
@@ -290,13 +295,13 @@ __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest,
     if (temp > amb_temp)
     {
         T dense = d_src[ get_voxel(x,y,z, vd)];
-        vel.y += (time_step * (temp - amb_temp) * buoy - dense * weight);
+        vel.y -= (time_step * (temp - amb_temp) * buoy - dense * weight);
     }
     
     v_dest[ get_voxel(x,y,z, vd)] = vel;
 }
 
-void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
+void simulate_fluid( fluid_state& state)
 {
 
     float measured_time=0.0f;
@@ -306,7 +311,9 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
 
     const int s = 8;
     dim3 block( s, s, s );
-    dim3 grid( (vol_dim.x+s-1)/s, (vol_dim.y+s-1)/s, (vol_dim.z+s-1)/s );
+    dim3 grid( (state.vol_dim.x+s-1)/s, 
+               (state.vol_dim.y+s-1)/s, 
+               (state.vol_dim.z+s-1)/s );
 
     cudaEventRecord( start, 0 );
     
@@ -314,28 +321,21 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.velocity->readTarget(),
             state.velocity->readTarget(),
             state.velocity->writeTarget(),
-            vol_dim, time_step, 1.0);
+            state.vol_dim, state.time_step, 1.0);
     state.velocity->swap();
-
-    /*
-    impulse<<<grid,block>>>(
-            state.velocity->readTarget(),
-            0.0f,0.0f,0.0f, 500.0f,
-            make_float3(0.0,-0.5,0.0), vol_dim);
-    */
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.temperature->readTarget(),
             state.temperature->writeTarget(),
-            vol_dim, time_step, 1.0);
+            state.vol_dim, state.time_step, 1.0);
     state.temperature->swap();
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.density->readTarget(),
             state.density->writeTarget(),
-            vol_dim, time_step, 1.0);
+            state.vol_dim, state.time_step, 1.0);
     state.density->swap();
 
     buoyancy<<<grid,block>>>( 
@@ -343,28 +343,28 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.temperature->readTarget(),
             state.density->readTarget(),
             state.velocity->writeTarget(), 
-            0.0f, 0.8f, 1.0f, 0.2f, vol_dim);
+            0.0f, state.time_step, 1.0f, 0.2f, state.vol_dim);
     state.velocity->swap();
 
     impulse<<<grid,block>>>( 
             state.temperature->readTarget(), 
-            256.0f, 256.0f, 256.0f, 32.0f, 
-            5.0f, vol_dim);
+            256.0f, 256.0f, 256.0f, 42.0f, 
+            5.0f, state.vol_dim);
 
     impulse<<<grid,block>>>( 
             state.density->readTarget(), 
             256.0f, 256.0f, 256.0f, 32.0f, 
-            0.07f, vol_dim);
-    /*
+            0.07f, state.vol_dim);
+    
     divergence<<<grid,block>>>(
             state.velocity->readTarget(), 
-            state.diverge, vol_dim, 0.5);
+            state.diverge, state.vol_dim, 0.5);
 
     // clear pressure
     impulse<<<grid,block>>>(
             state.pressure->readTarget(),
             0.0f, 0.0f, 0.0f, 1000000.0f,
-            0.0f, vol_dim);
+            0.0f, state.vol_dim);
     
     for (int i=0; i<35; i++)
     {
@@ -372,7 +372,7 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
                 state.diverge,
                 state.pressure->readTarget(),
                 state.pressure->writeTarget(), 
-                vol_dim, 0.2);
+                state.vol_dim, -1.0);
         state.pressure->swap();
     }
 
@@ -380,9 +380,8 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.velocity->readTarget(),
             state.velocity->writeTarget(),
             state.pressure->readTarget(), 
-            vol_dim, 1.1);
+            state.vol_dim, 1.1);
     state.velocity->swap();
-    */
 
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
@@ -501,6 +500,13 @@ int main(int argc, char* args[])
     uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
    
     fluid_state state(vol_d);
+    
+    state.impulseLoc = make_float3(0.5*float(vol_d.x),
+                                   0.5*float(vol_d.y),
+                                   0.5*float(vol_d.z));
+    state.impulseTemp = 4.0;
+    state.impulseDensity = 0.06;
+    state.time_step = 0.1;
 
     dim3 full_grid(vol_d.x/8+1, vol_d.y/8+1, vol_d.z/8+1);
     dim3 full_block(8,8,8);
@@ -526,7 +532,7 @@ int main(int argc, char* args[])
 
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
         for (int st=0; st<1; st++) {
-            simulate_fluid(state, vol_d, 1.0);
+            simulate_fluid(state);
         }
     }
 
