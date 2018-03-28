@@ -13,10 +13,12 @@ struct fluid_state {
     float3 impulseLoc;
     float impulseTemp;
     float impulseDensity;
+    float impulseRadius;
     float cell_size;
     float time_step;
-    int3 dimensions;
+    int3 dim;
     int64_t nelems;
+    int step;
     DoubleBuffer<float3> *velocity;
     DoubleBuffer<float> *density;
     DoubleBuffer<float> *temperature;
@@ -24,7 +26,8 @@ struct fluid_state {
     float *diverge;
 
     fluid_state(int3 dims) {
-        dimensions = dims;
+        step = 0;
+        dim = dims;
         nelems = dims.x*dims.y*dims.z;
         velocity = new DoubleBuffer<float3>(nelems);
         density = new DoubleBuffer<float>(nelems);
@@ -261,7 +264,7 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vd,
 }
 
 template <typename T>
-__global__ void impulse( T *target, float xp, float yp, float zp, 
+__global__ void impulse( T *target, float3 c,
     float radius, T val, int3 vd)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
@@ -272,7 +275,7 @@ __global__ void impulse( T *target, float xp, float yp, float zp,
     
     float3 p = make_float3(float(x),float(y),float(z));
     
-    float dist = sqrt(pow(p.x-xp,2.0)+pow(p.y-yp,2.0)+pow(p.z-zp,2.0));
+    float dist = length(p-c);
 
     if (dist < radius) {
         target[ get_voxel(x,y,z, vd) ] = val;
@@ -311,9 +314,9 @@ void simulate_fluid( fluid_state& state)
 
     const int s = 8;
     dim3 block( s, s, s );
-    dim3 grid( (state.vol_dim.x+s-1)/s, 
-               (state.vol_dim.y+s-1)/s, 
-               (state.vol_dim.z+s-1)/s );
+    dim3 grid( (state.dim.x+s-1)/s, 
+               (state.dim.y+s-1)/s, 
+               (state.dim.z+s-1)/s );
 
     cudaEventRecord( start, 0 );
     
@@ -321,21 +324,21 @@ void simulate_fluid( fluid_state& state)
             state.velocity->readTarget(),
             state.velocity->readTarget(),
             state.velocity->writeTarget(),
-            state.vol_dim, state.time_step, 1.0);
+            state.dim, state.time_step, 1.0);
     state.velocity->swap();
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.temperature->readTarget(),
             state.temperature->writeTarget(),
-            state.vol_dim, state.time_step, 1.0);
+            state.dim, state.time_step, 1.0);
     state.temperature->swap();
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.density->readTarget(),
             state.density->writeTarget(),
-            state.vol_dim, state.time_step, 1.0);
+            state.dim, state.time_step, 1.0);
     state.density->swap();
 
     buoyancy<<<grid,block>>>( 
@@ -343,28 +346,28 @@ void simulate_fluid( fluid_state& state)
             state.temperature->readTarget(),
             state.density->readTarget(),
             state.velocity->writeTarget(), 
-            0.0f, state.time_step, 1.0f, 0.2f, state.vol_dim);
+            0.0f, state.time_step, 1.0f, 0.2f, state.dim);
     state.velocity->swap();
 
     impulse<<<grid,block>>>( 
             state.temperature->readTarget(), 
-            256.0f, 256.0f, 256.0f, 42.0f, 
-            5.0f, state.vol_dim);
+            state.impulseLoc, state.impulseRadius, 
+            state.impulseTemp, state.dim);
 
-    impulse<<<grid,block>>>( 
+    impulse<<<grid,block>>>(
             state.density->readTarget(), 
-            256.0f, 256.0f, 256.0f, 32.0f, 
-            0.07f, state.vol_dim);
+            state.impulseLoc, state.impulseRadius, 
+            state.impulseDensity, state.dim);
     
     divergence<<<grid,block>>>(
-            state.velocity->readTarget(), 
-            state.diverge, state.vol_dim, 0.5);
+            state.velocity->readTarget(),
+            state.diverge, state.dim, 0.5);
 
     // clear pressure
     impulse<<<grid,block>>>(
             state.pressure->readTarget(),
-            0.0f, 0.0f, 0.0f, 1000000.0f,
-            0.0f, state.vol_dim);
+            make_float3(0.0), 1000000.0f,
+            0.0f, state.dim);
     
     for (int i=0; i<35; i++)
     {
@@ -372,7 +375,7 @@ void simulate_fluid( fluid_state& state)
                 state.diverge,
                 state.pressure->readTarget(),
                 state.pressure->writeTarget(), 
-                state.vol_dim, -1.0);
+                state.dim, -1.0);
         state.pressure->swap();
     }
 
@@ -380,7 +383,7 @@ void simulate_fluid( fluid_state& state)
             state.velocity->readTarget(),
             state.velocity->writeTarget(),
             state.pressure->readTarget(), 
-            state.vol_dim, 1.1);
+            state.dim, 1.0);
     state.velocity->swap();
 
     cudaEventRecord( stop, 0 );
@@ -502,10 +505,11 @@ int main(int argc, char* args[])
     fluid_state state(vol_d);
     
     state.impulseLoc = make_float3(0.5*float(vol_d.x),
-                                   0.5*float(vol_d.y),
+                                   0.5*float(vol_d.y)+80.0,
                                    0.5*float(vol_d.z));
     state.impulseTemp = 4.0;
-    state.impulseDensity = 0.06;
+    state.impulseDensity = 0.02;
+    state.impulseRadius = 36.0;
     state.time_step = 0.1;
 
     dim3 full_grid(vol_d.x/8+1, vol_d.y/8+1, vol_d.z/8+1);
@@ -513,13 +517,13 @@ int main(int argc, char* args[])
 
     // zero out buffers
     impulse<<<full_grid, full_block>>>( state.velocity->readTarget(), 
-        0.0f, 0.0f, 0.0f, 100000.0f, make_float3(0.0), vol_d);
+        make_float3(0.0), 100000.0f, make_float3(0.0), vol_d);
 
     impulse<<<full_grid, full_block>>>( state.temperature->readTarget(), 
-        0.0f, 0.0f, 0.0f, 100000.0f, 0.0f, vol_d);
+        make_float3(0.0), 100000.0f, 0.0f, vol_d);
 
     impulse<<<full_grid, full_block>>>( state.density->readTarget(), 
-        0.0f, 0.0f, 0.0f, 100000.0f, 0.0f, vol_d);
+        make_float3(0.0), 100000.0f, 0.0f, vol_d);
 
     for (int f=0; f<=800; f++) {
         
@@ -533,6 +537,7 @@ int main(int argc, char* args[])
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
         for (int st=0; st<1; st++) {
             simulate_fluid(state);
+            state.step++;
         }
     }
 
