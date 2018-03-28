@@ -298,7 +298,7 @@ __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest,
     if (temp > amb_temp)
     {
         T dense = d_src[ get_voxel(x,y,z, vd)];
-        vel.y -= (time_step * (temp - amb_temp) * buoy - dense * weight);
+        vel.y += (time_step * (temp - amb_temp) * buoy - dense * weight);
     }
     
     v_dest[ get_voxel(x,y,z, vd)] = vel;
@@ -349,14 +349,17 @@ void simulate_fluid( fluid_state& state)
             0.0f, state.time_step, 1.0f, 0.2f, state.dim);
     state.velocity->swap();
 
+    float3 location = state.impulseLoc;
+    location.x += 120.0*sinf(0.005f*float(state.step));
+
     impulse<<<grid,block>>>( 
             state.temperature->readTarget(), 
-            state.impulseLoc, state.impulseRadius, 
+            location, state.impulseRadius, 
             state.impulseTemp, state.dim);
 
     impulse<<<grid,block>>>(
             state.density->readTarget(), 
-            state.impulseLoc, state.impulseRadius, 
+            location, state.impulseRadius, 
             state.impulseDensity, state.dim);
     
     divergence<<<grid,block>>>(
@@ -406,8 +409,8 @@ __global__ void render_pixel( uint8_t *image, float *volume,
 
     int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
     // Create Normalized UV image coordinates
-    float uvx = float(x)/float(img_dims.x)-0.5;
-    float uvy = float(y)/float(img_dims.y)-0.5;
+    float uvx =  float(x)/float(img_dims.x)-0.5;
+    float uvy = -float(y)/float(img_dims.y)+0.5;
     uvx *= float(img_dims.x)/float(img_dims.y);     
 
     // Set up ray originating from camera
@@ -505,7 +508,7 @@ int main(int argc, char* args[])
     fluid_state state(vol_d);
     
     state.impulseLoc = make_float3(0.5*float(vol_d.x),
-                                   0.5*float(vol_d.y)+80.0,
+                                   0.5*float(vol_d.y)-120.0,
                                    0.5*float(vol_d.z));
     state.impulseTemp = 4.0;
     state.impulseDensity = 0.02;
