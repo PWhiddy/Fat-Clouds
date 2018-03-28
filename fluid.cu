@@ -68,24 +68,29 @@ inline __device__ int get_voxel(int x, int y, int z, int3 d)
     return z*d.y*d.x + y*d.x + x;
 }
 
+template <typename T> inline __device__ T zero() { return 0.0; }
+
+template <> inline __device__ float  zero<float>() { return 0.0f; }
+template <> inline __device__ float3 zero<float3>() { return make_float3(0.0f); }
+
 template <typename T>
 inline __device__ T get_cell(int3 c, int3 d, T *vol) {
     if (c.x < 0 || c.y < 0 || c.z < 0 ||
         c.x >= d.x || c.y >= d.y || c.z >= d.z) {
-    return 0.0;
+        return zero<T>();
     } else {
         return vol[ get_voxel( c.x, c.y, c.z, d ) ];
     }
 }
 
 template <typename T>
-inline __device__ T get_cell(float3 p, int3 d, T *vol) {
+inline __device__ T get_cellF(float3 p, int3 d, T *vol) {
     
     // bilinear interpolation
     float3 l = floor(p);
     int3 rp = make_int3(l);
     float3 dif = p-l;
-    float sum = 0.0;
+    T sum = zero<T>();
 
     #pragma unroll
     for (int a=0; a<=1; a++) 
@@ -130,7 +135,7 @@ inline __device__ int3 mod_coords(int i, int d) {
 }
 
 template <typename T>
-inline __device__ float read_shared(T *mem, dim3 c, 
+inline __device__ T read_shared(T *mem, dim3 c, 
     int3 blk_dim, int pad, int x, int y, int z)
 {
     return mem[ get_voxel(c.x+pad+x, c.y+pad+y, c.z+pad+z, blk_dim) ];
@@ -184,7 +189,7 @@ __global__ void pressure_solve(T *div, T *p_src, T *p_dst,
     //avg /= 6.0;
     //avg -= o;
 
-    p_dst[ get_voxel(x,y,z, vd) ] = (p_sum+0.5*d)*0.166667;//o + avg*amount;
+    p_dst[ get_voxel(x,y,z, vd) ] = (p_sum+amount*d)*0.166667;//o + avg*amount;
 }
 
 template <typename V, typename T>
@@ -205,12 +210,12 @@ __global__ void divergence(V *velocity, T *div, int3 vd)
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
     T d = 
-         read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0);
-    d -= read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0);
-    d += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0);
-    d -= read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0);
-    d += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1);
-    d -= read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1);
+         read_shared(loc, threadIdx, s_dims, padding,  1,  0,  0).x;
+    d -= read_shared(loc, threadIdx, s_dims, padding, -1,  0,  0).x;
+    d += read_shared(loc, threadIdx, s_dims, padding,  0,  1,  0).y;
+    d -= read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0).y;
+    d += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1).z;
+    d -= read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1).z;
     d *= 0.5;
 
     div[ get_voxel(x,y,z, vd) ] = d;
@@ -220,7 +225,7 @@ template <typename V, typename T>
 __global__ void subtract_pressure(V *v_src, V *v_dest, T *pressure, 
     int3 vd, float grad_scale)
 {
-    __shared__ V loc[1024];
+    __shared__ T loc[1024];
     const int padding = 1; // How far to load past end of cube
     const int sdim = blockDim.x+2*padding; // 10 with blockdim 8
     const int3 s_dims = make_int3(sdim, sdim, sdim);
@@ -266,7 +271,7 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vd,
 
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
     
-    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_cell(np, vd, source);
+    dest[ get_voxel(x,y,z, vd) ] = dissipation * get_cellF(np, vd, source);
 }
 
 template <typename T>
@@ -290,7 +295,7 @@ __global__ void impulse( T *target, float xp, float yp, float zp,
 
 template <typename V, typename T>
 __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest, 
-    float amb_temp, float time_step, float sig, float kap, int3 vd)
+    float amb_temp, float time_step, float buoy, float weight, int3 vd)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
     const int y = blockDim.y*blockIdx.y+threadIdx.y;
@@ -304,7 +309,7 @@ __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest,
     if (temp > amb_temp)
     {
         T dense = d_src[ get_voxel(x,y,z, vd)];
-        vel.y += (time_step * (temp - amb_temp) * sig - dense * kap);
+        vel.y += (time_step * (temp - amb_temp) * buoy - dense * weight);
     }
     
     v_dest[ get_voxel(x,y,z, vd)] = vel;
@@ -340,20 +345,75 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
     dim3 grid( (vol_dim.x+s-1)/s, (vol_dim.y+s-1)/s, (vol_dim.z+s-1)/s );
 
     cudaEventRecord( start, 0 );
-        
-    pressure_solve<<<grid,block>>>( 
-            state.diverge,
-            state.density->readTarget(),
-            state.density->writeTarget(), 
-            vol_dim, 0.7);
     
+    advection<<<grid,block>>>(
+            state.velocity->readTarget(),
+            state.velocity->readTarget(),
+            state.velocity->writeTarget(),
+            vol_dim, time_step, 1.0);
+    state.velocity->swap();
+
+    advection<<<grid,block>>>(
+            state.velocity->readTarget(),
+            state.temperature->readTarget(),
+            state.temperature->writeTarget(),
+            vol_dim, time_step, 1.0);
+    state.temperature->swap();
+
+    advection<<<grid,block>>>(
+            state.velocity->readTarget(),
+            state.density->readTarget(),
+            state.density->writeTarget(),
+            vol_dim, time_step, 1.0);
     state.density->swap();
 
-    advection<<<grid,block>>>( 
+    buoyancy<<<grid,block>>>( 
             state.velocity->readTarget(), 
-            state.density->readTarget(), 
+            state.temperature->readTarget(),
+            state.density->readTarget(),
+            state.velocity->writeTarget(), 
+            0.0f, 0.8f, 1.0f, 0.05f, vol_dim);
+    state.velocity->swap();
+
+    impulse<<<grid,block>>>( 
+            state.temperature->writeTarget(), 
+            256.0f, 256.0f, 256.0f, 16.0f, 
+            5.0f, vol_dim);
+    state.temperature->swap();
+
+    impulse<<<grid,block>>>( 
             state.density->writeTarget(), 
-            vol_dim, time_step, 1.0);
+            256.0f, 256.0f, 256.0f, 16.0f, 
+            0.07f, vol_dim);
+    state.density->swap();
+
+    divergence<<<grid,block>>>(
+            state.velocity->readTarget(), 
+            state.diverge, vol_dim);
+
+    // clear pressure
+    impulse<<<grid,block>>>(
+            state.pressure->writeTarget(),
+            0.0f, 0.0f, 0.0f, 1000000.0f,
+            0.0f, vol_dim);
+    state.pressure->swap();
+    
+    for (int i=0; i<35; i++)
+    {
+        pressure_solve<<<grid,block>>>( 
+                state.diverge,
+                state.pressure->readTarget(),
+                state.pressure->writeTarget(), 
+                vol_dim, 0.5);
+        state.pressure->swap();
+    }
+
+    subtract_pressure<<<grid,block>>>(
+            state.velocity->readTarget(),
+            state.velocity->writeTarget(),
+            state.pressure->readTarget(), 
+            vol_dim, 1.1);
+    state.velocity->swap();
     
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
@@ -362,7 +422,7 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
     cudaEventDestroy( start );
     cudaEventDestroy( stop );
 
-    //std::cout << "Simulation Time: " << measured_time << "\n";
+    std::cout << "Simulation Time: " << measured_time << "\n";
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
@@ -390,14 +450,14 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     // Trace ray through volume
     for (int step=0; step<512; step++) {
         // At each step, cast occlusion ray towards light source
-        float c_density = get_cell(ray_pos, vd, volume);
+        float c_density = get_cellF(ray_pos, vd, volume);
         float3 occ_pos = ray_pos;
         ray_pos += ray_dir*step_size;
         // Don't bother with occlusion ray if theres nothing there
         if (c_density < occ_thresh) continue;
         float transparency = 1.0;
         for (int occ=0; occ<512; occ++) {
-            transparency *= fmax(1.0-get_cell(occ_pos, vd, volume),0.0);
+            transparency *= fmax(1.0-get_cellF(occ_pos, vd, volume),0.0);
             if (transparency < occ_thresh) break;
             occ_pos += dir_to_light*step_size;
         }
