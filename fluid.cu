@@ -112,23 +112,6 @@ inline __device__ T get_cellF(float3 p, int3 d, T *vol) {
     return sum;
 }
    
-__global__ void initialize_volume(float *volume, int3 vd)
-{
-    int x = blockDim.x*blockIdx.x+threadIdx.x;
-    int y = blockDim.y*blockIdx.y+threadIdx.y;
-    int z = blockDim.z*blockIdx.z+threadIdx.z;
-    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-    const float width = 24.0;
-    const float den = 0.058;
-    float dx = float(x-vd.x/2);
-    float dy = float(y-vd.y/2);
-    float dz = float(z-vd.z/2);
-    float dist = sqrtf(dx*dx+dy*dy+dz*dz);
-    float density = den/(1.0+pow(1.8,dist-width));
-    volume[ get_voxel( x, y, z, make_int3(vd.x, vd.y, vd.z)) ] 
-        = density;
-}
-
 // Convert single index into 3D coordinates
 inline __device__ int3 mod_coords(int i, int d) {
     return make_int3( i%d, (i/d) % d, (i/(d*d)) );
@@ -193,7 +176,7 @@ __global__ void pressure_solve(T *div, T *p_src, T *p_dst,
 }
 
 template <typename V, typename T>
-__global__ void divergence(V *velocity, T *div, int3 vd)
+__global__ void divergence(V *velocity, T *div, int3 vd, float half_cell)
 {
     __shared__ V loc[1024];
     const int padding = 1; // How far to load past end of cube
@@ -216,7 +199,7 @@ __global__ void divergence(V *velocity, T *div, int3 vd)
     d -= read_shared(loc, threadIdx, s_dims, padding,  0, -1,  0).y;
     d += read_shared(loc, threadIdx, s_dims, padding,  0,  0,  1).z;
     d -= read_shared(loc, threadIdx, s_dims, padding,  0,  0, -1).z;
-    d *= 0.5;
+    d *= half_cell;
 
     div[ get_voxel(x,y,z, vd) ] = d;
 }
@@ -265,8 +248,6 @@ __global__ void advection( V *velocity, T *source, T *dest, int3 vd,
 
     if (x >= vd.x || y >= vd.y || z >= vd.z) return;
     
-    float3 p = make_float3(float(x),float(y),float(z));
-
     V vel = velocity[ get_voxel(x,y,z,vd) ];
 
     float3 np = make_float3(float(x),float(y),float(z)) - time_step*vel;
@@ -315,23 +296,6 @@ __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest,
     v_dest[ get_voxel(x,y,z, vd)] = vel;
 }
 
-/*
-template <typename T>
-__global__ void clear( T *target, T val, int3 vol_dims)
-{
-    const int x = blockDim.x*blockIdx.x+threadIdx.x;
-    const int y = blockDim.y*blockIdx.y+threadIdx.y;
-    const int z = blockDim.z*blockIdx.z+threadIdx.z;
-    const int3 vd = make_int3(vol_dims.x, vol_dims.y, vol_dims.z);
-
-    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
-
-    target[ get_voxel(x,y,z, vd) ] = val;
-}
-*/
-
-// void time_kernel(void *kernel, grid, block, params) ?? 
-
 void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
 {
 
@@ -353,6 +317,13 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             vol_dim, time_step, 1.0);
     state.velocity->swap();
 
+    /*
+    impulse<<<grid,block>>>(
+            state.velocity->readTarget(),
+            0.0f,0.0f,0.0f, 500.0f,
+            make_float3(0.0,-0.5,0.0), vol_dim);
+    */
+
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.temperature->readTarget(),
@@ -372,31 +343,28 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.temperature->readTarget(),
             state.density->readTarget(),
             state.velocity->writeTarget(), 
-            0.0f, 0.8f, 1.0f, 0.05f, vol_dim);
+            0.0f, 0.8f, 1.0f, 0.2f, vol_dim);
     state.velocity->swap();
 
     impulse<<<grid,block>>>( 
-            state.temperature->writeTarget(), 
-            256.0f, 256.0f, 256.0f, 16.0f, 
+            state.temperature->readTarget(), 
+            256.0f, 256.0f, 256.0f, 32.0f, 
             5.0f, vol_dim);
-    state.temperature->swap();
 
     impulse<<<grid,block>>>( 
-            state.density->writeTarget(), 
-            256.0f, 256.0f, 256.0f, 16.0f, 
+            state.density->readTarget(), 
+            256.0f, 256.0f, 256.0f, 32.0f, 
             0.07f, vol_dim);
-    state.density->swap();
-
+    /*
     divergence<<<grid,block>>>(
             state.velocity->readTarget(), 
-            state.diverge, vol_dim);
+            state.diverge, vol_dim, 0.5);
 
     // clear pressure
     impulse<<<grid,block>>>(
-            state.pressure->writeTarget(),
+            state.pressure->readTarget(),
             0.0f, 0.0f, 0.0f, 1000000.0f,
             0.0f, vol_dim);
-    state.pressure->swap();
     
     for (int i=0; i<35; i++)
     {
@@ -404,7 +372,7 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
                 state.diverge,
                 state.pressure->readTarget(),
                 state.pressure->writeTarget(), 
-                vol_dim, 0.5);
+                vol_dim, 0.2);
         state.pressure->swap();
     }
 
@@ -414,7 +382,8 @@ void simulate_fluid( fluid_state& state, int3 vol_dim, float time_step)
             state.pressure->readTarget(), 
             vol_dim, 1.1);
     state.velocity->swap();
-    
+    */
+
     cudaEventRecord( stop, 0 );
     cudaThreadSynchronize();
     cudaEventElapsedTime( &measured_time, start, stop );
@@ -473,7 +442,7 @@ __global__ void render_pixel( uint8_t *image, float *volume,
 }
 
 void render_fluid(uint8_t *render_target, int3 img_dims, 
-    float *d_volume /*pointer to gpu mem?*/, int3 vol_dims, 
+    float *d_volume, int3 vol_dims, 
     float step_size, float3 light_dir, float3 cam_pos, float rotation) {
 
     float measured_time=0.0f;
@@ -535,20 +504,16 @@ int main(int argc, char* args[])
 
     dim3 full_grid(vol_d.x/8+1, vol_d.y/8+1, vol_d.z/8+1);
     dim3 full_block(8,8,8);
-    
-    initialize_volume<<<full_grid, full_block>>>
-        (state.density->writeTarget(), vol_d);
-    
-    state.density->swap();
 
-    // zero out velocity
-    impulse<<<full_grid, full_block>>>( state.velocity->writeTarget(), 
-        0.0, 0.0, 0.0, 100000.0, make_float3(0.0), vol_d);
+    // zero out buffers
+    impulse<<<full_grid, full_block>>>( state.velocity->readTarget(), 
+        0.0f, 0.0f, 0.0f, 100000.0f, make_float3(0.0), vol_d);
 
-    // initial velocity
-    impulse<<<full_grid, full_block>>>( state.velocity->writeTarget(), 
-        256.0, 256.0, 256.0, 150.0, make_float3(0.0,-0.1,0.0), vol_d);
-    state.velocity->swap();
+    impulse<<<full_grid, full_block>>>( state.temperature->readTarget(), 
+        0.0f, 0.0f, 0.0f, 100000.0f, 0.0f, vol_d);
+
+    impulse<<<full_grid, full_block>>>( state.density->readTarget(), 
+        0.0f, 0.0f, 0.0f, 100000.0f, 0.0f, vol_d);
 
     for (int f=0; f<=800; f++) {
         
@@ -560,9 +525,8 @@ int main(int argc, char* args[])
                 vol_d, 1.0, light, cam, 0.0);
 
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
-        for (int st=0; st<5; st++) {
+        for (int st=0; st<1; st++) {
             simulate_fluid(state, vol_d, 1.0);
-            state.density->swap();
         }
     }
 
