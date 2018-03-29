@@ -21,4 +21,4 @@ There are [**videos**](https://drive.google.com/drive/folders/1A8PH2aZoj2ab8UDZK
 
 Testing the renderer with spheres
 
-![](https://github.com/PWhiddy/fluid/blob/master/screenshots/2.jpg "Render")
+![](https://i.imgur.com/un8Smjb.jpg "Render")
