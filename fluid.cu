@@ -353,14 +353,14 @@ void simulate_fluid( fluid_state& state)
             state.velocity->readTarget(),
             state.temperature->readTarget(),
             state.temperature->writeTarget(),
-            state.dim, state.time_step, 1.0);
+            state.dim, state.time_step, 0.98);
     state.temperature->swap();
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.density->readTarget(),
             state.density->writeTarget(),
-            state.dim, state.time_step, 1.0);
+            state.dim, state.time_step, 0.9995);
     state.density->swap();
 
     buoyancy<<<grid,block>>>( 
@@ -544,7 +544,7 @@ int main(int argc, char* args[])
     float3 light;
     light.x =  0.1;
     light.y =  1.0;
-    light.z =  0.75;
+    light.z = -0.5;
 
     uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
    
@@ -555,7 +555,7 @@ int main(int argc, char* args[])
                                    0.5*float(vol_d.z));
     state.impulseTemp = 4.0;
     state.impulseDensity = 0.35;
-    state.impulseRadius = 28.0;
+    state.impulseRadius = 18.0;
     state.f_weight = 0.05;
     state.time_step = 0.1;
 
@@ -572,10 +572,12 @@ int main(int argc, char* args[])
     impulse<<<full_grid, full_block>>>( state.density->readTarget(), 
         make_float3(0.0), 100000.0f, 0.0f, vol_d);
 
-    for (int f=0; f<=1800; f++) {
+    for (int f=0; f<=3000; f++) {
         
         std::cout << "Step " << f+1 << "\n";
         
+        light.x = 0.7*sinf(0.03*float(state.step));
+        light.z = 0.7*cosf(0.03*float(state.step));
         render_fluid(
                 img, img_d, 
                 state.density->readTarget(), 
