@@ -15,6 +15,8 @@ In ```build.sh```, check that the path to your cuda installation is correct. The
 
 ![](https://i.imgur.com/qKtCdZf.png "Render")
 
+Navier Tokes yo
+
 ![](https://i.imgur.com/uYr2u7y.png "Render")
 
 ![](https://i.imgur.com/Y3MGgck.png "Render")
