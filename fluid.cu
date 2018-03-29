@@ -395,7 +395,7 @@ void simulate_fluid( fluid_state& state)
             make_float3(0.0), 1000000.0f,
             0.0f, state.dim);
     
-    for (int i=0; i<45; i++)
+    for (int i=0; i<75; i++)
     {
         pressure_solve<<<grid,block>>>( 
                 state.diverge,
@@ -429,7 +429,7 @@ __device__ float2 rotate(float2 p, float a)
 }
 
 __global__ void render_pixel( uint8_t *image, float *volume, 
-        int3 img_dims, int3 vol_dims, float step_size, 
+        float *temper, int3 img_dims, int3 vol_dims, float step_size, 
         float3 light_dir, float3 cam_pos, float rotation)
 {
     const int x = blockDim.x*blockIdx.x+threadIdx.x;
@@ -461,6 +461,7 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     const float occ_thresh = 0.001;
     float d_accum = 1.0;
     float light_accum = 0.0;
+    float temp_accum = 0.0;
 
     // Trace ray through volume
     for (int step=0; step<512; step++) {
@@ -490,7 +491,7 @@ __global__ void render_pixel( uint8_t *image, float *volume,
 }
 
 void render_fluid(uint8_t *render_target, int3 img_dims, 
-    float *d_volume, int3 vol_dims, 
+    float *d_volume, float *temper, int3 vol_dims, 
     float step_size, float3 light_dir, float3 cam_pos, float rotation) {
 
     float measured_time=0.0f;
@@ -514,7 +515,7 @@ void render_fluid(uint8_t *render_target, int3 img_dims,
     }
 
     render_pixel<<<grid,block>>>( 
-        device_img, d_volume, img_dims, vol_dims, 
+        device_img, d_volume, temper, img_dims, vol_dims, 
         step_size, light_dir, cam_pos, rotation);
 
     // Read image back
@@ -535,7 +536,7 @@ int main(int argc, char* args[])
 {
 
     const int3 vol_d = make_int3(512,512,512);
-    const int3 img_d = make_int3(1200,900,0);
+    const int3 img_d = make_int3(1920,1080,0);
 
     float3 cam;
     cam.x = static_cast<float>(vol_d.x)*0.5;
@@ -576,11 +577,12 @@ int main(int argc, char* args[])
         
         std::cout << "Step " << f+1 << "\n";
         
-        light.x = 0.7*sinf(0.03*float(state.step));
-        light.z = 0.7*cosf(0.03*float(state.step));
+        light.x = 0.7*sinf(0.006*float(state.step));
+        light.z = 0.7*cosf(0.006*float(state.step));
         render_fluid(
                 img, img_d, 
                 state.density->readTarget(), 
+                state.temperature->readTarget(),
                 vol_d, 1.0, light, cam, 0.0*float(state.step));
 
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
