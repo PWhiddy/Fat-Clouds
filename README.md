@@ -1,12 +1,13 @@
-3D Fluid
+# 3D Fluid
 
 A bare-bones but polished fluid simulator and volumetric renderer written in CUDA C/C++ in ~600 LOC.
-TODO: better consolidation of simulation and state parameters.
 
 The organization is based on Philip Rideout's 2D OpenGL simulator (http://prideout.net/blog/?p=58)
 As well as George Corney's interactive WebGL demo (https://github.com/haxiomic/GPU-Fluid-Experiments)
 
-There are [videos](https://drive.google.com/drive/folders/1A8PH2aZoj2ab8UDZKSdC6fsMPB5RUtyr?usp=sharing)!
+TODO: better consolidation of simulation and state parameters.
+
+There are [**videos**](https://drive.google.com/drive/folders/1A8PH2aZoj2ab8UDZKSdC6fsMPB5RUtyr?usp=sharing)!
 
 ![](https://i.imgur.com/qKtCdZf.png "Render")
 
