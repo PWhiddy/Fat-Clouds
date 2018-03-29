@@ -21,6 +21,3 @@ There are [videos](https://drive.google.com/drive/folders/1A8PH2aZoj2ab8UDZKSdC6
 Testing the renderer with spheres
 
 ![](https://github.com/PWhiddy/fluid/blob/master/screenshots/2.jpg "Render")
-
-![](https://github.com/PWhiddy/fluid/blob/master/screenshots/1.jpg "Render")
-
