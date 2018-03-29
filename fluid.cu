@@ -8,6 +8,8 @@
 #include "cutil_math.h"
 #include "double_buffer.cpp"
 
+
+// Container for simulation state
 struct fluid_state {
 
     float3 impulseLoc;
@@ -46,6 +48,8 @@ struct fluid_state {
     }
 };
 
+
+// A couple IO utility functions
 std::string pad_number(int n)
 {
     std::ostringstream ss;
@@ -64,6 +68,7 @@ void save_image(uint8_t *pixels, int3 img_dims, std::string name) {
     }
 }
 
+// GPU helper functions
 inline __device__ int3 operator*(const dim3 a, const uint3 b) {
     return make_int3(a.x*b.x, a.y*b.y, a.z*b.z);
 }
@@ -151,6 +156,7 @@ __device__ void load_shared(dim3 blkDim, dim3 blkIdx,
     }
 }
 
+// Simulation compute kernels
 template <typename T>
 __global__ void pressure_solve(T *div, T *p_src, T *p_dst, 
         int3 vd, float amount)
@@ -326,6 +332,7 @@ __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest,
     v_dest[ get_voxel(x,y,z, vd)] = vel;
 }
 
+// Runs a single iteration of the simulation
 void simulate_fluid( fluid_state& state)
 {
 
@@ -395,7 +402,7 @@ void simulate_fluid( fluid_state& state)
             make_float3(0.0), 1000000.0f,
             0.0f, state.dim);
     
-    for (int i=0; i<75; i++)
+    for (int i=0; i<35; i++)
     {
         pressure_solve<<<grid,block>>>( 
                 state.diverge,
@@ -428,6 +435,7 @@ __device__ float2 rotate(float2 p, float a)
                        p.y*cos(a) + p.x*sin(a));
 }
 
+// GPU volumetric raymarcher
 __global__ void render_pixel( uint8_t *image, float *volume, 
         float *temper, int3 img_dims, int3 vol_dims, float step_size, 
         float3 light_dir, float3 cam_pos, float rotation)
