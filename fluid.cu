@@ -14,6 +14,7 @@ struct fluid_state {
     float impulseTemp;
     float impulseDensity;
     float impulseRadius;
+    float f_weight;
     float cell_size;
     float time_step;
     int3 dim;
@@ -282,6 +283,27 @@ __global__ void impulse( T *target, float3 c,
     }
 }
 
+template <typename T>
+__global__ void soft_impulse( T *target, float3 c,
+    float radius, T val, float speed, int3 vd)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    float3 p = make_float3(float(x),float(y),float(z));
+    
+    float dist = length(p-c);
+
+    T cur = target[ get_voxel(x,y,z, vd) ];
+
+    if (dist < radius && cur < val) {
+        target[ get_voxel(x,y,z, vd) ] = cur + speed*val;
+    }
+}
+
 template <typename V, typename T>
 __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest, 
     float amb_temp, float time_step, float buoy, float weight, int3 vd)
@@ -346,21 +368,22 @@ void simulate_fluid( fluid_state& state)
             state.temperature->readTarget(),
             state.density->readTarget(),
             state.velocity->writeTarget(), 
-            0.0f, state.time_step, 1.0f, 0.2f, state.dim);
+            0.0f, state.time_step, 1.0f, state.f_weight, state.dim);
     state.velocity->swap();
 
     float3 location = state.impulseLoc;
-    location.x += 120.0*sinf(0.005f*float(state.step));
+    location.x += 75.0*sinf(-0.003f*float(state.step));
+    location.y += 75.0*cosf(-0.003f*float(state.step));
 
-    impulse<<<grid,block>>>( 
+    soft_impulse<<<grid,block>>>( 
             state.temperature->readTarget(), 
             location, state.impulseRadius, 
-            state.impulseTemp, state.dim);
+            state.impulseTemp, 0.01, state.dim);
 
-    impulse<<<grid,block>>>(
+    soft_impulse<<<grid,block>>>(
             state.density->readTarget(), 
             location, state.impulseRadius, 
-            state.impulseDensity, state.dim);
+            state.impulseDensity, 0.01, state.dim);
     
     divergence<<<grid,block>>>(
             state.velocity->readTarget(),
@@ -372,7 +395,7 @@ void simulate_fluid( fluid_state& state)
             make_float3(0.0), 1000000.0f,
             0.0f, state.dim);
     
-    for (int i=0; i<35; i++)
+    for (int i=0; i<45; i++)
     {
         pressure_solve<<<grid,block>>>( 
                 state.diverge,
@@ -399,6 +422,12 @@ void simulate_fluid( fluid_state& state)
     std::cout << "Simulation Time: " << measured_time << "\n";
 }
 
+__device__ float2 rotate(float2 p, float a)
+{
+    return make_float2(p.x*cos(a) - p.y*sin(a),
+                       p.y*cos(a) + p.x*sin(a));
+}
+
 __global__ void render_pixel( uint8_t *image, float *volume, 
         int3 img_dims, int3 vol_dims, float step_size, 
         float3 light_dir, float3 cam_pos, float rotation)
@@ -413,9 +442,21 @@ __global__ void render_pixel( uint8_t *image, float *volume,
     float uvy = -float(y)/float(img_dims.y)+0.5;
     uvx *= float(img_dims.x)/float(img_dims.y);     
 
+    float3 v_center = make_float3(
+            0.5*float(vol_dims.x),
+            0.5*float(vol_dims.y),
+            0.5*float(vol_dims.z));
+
     // Set up ray originating from camera
-    float3 ray_pos = cam_pos;
-    const float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
+    float3 ray_pos = cam_pos-v_center;
+    float2 pos_rot = rotate(make_float2(ray_pos.x, ray_pos.z), rotation);
+    ray_pos.x = pos_rot.x;
+    ray_pos.z = pos_rot.y;
+    ray_pos += v_center;
+    float3 ray_dir = normalize(make_float3(uvx,uvy,0.5));
+    float2 dir_rot = rotate(make_float2(ray_dir.x, ray_dir.z), rotation);
+    ray_dir.x = dir_rot.x;
+    ray_dir.z = dir_rot.y;
     const float3 dir_to_light = normalize(light_dir);
     const float occ_thresh = 0.001;
     float d_accum = 1.0;
@@ -440,6 +481,8 @@ __global__ void render_pixel( uint8_t *image, float *volume,
         if (d_accum < occ_thresh) break;
     }
 
+    // gamma correction
+    light_accum = pow(light_accum, 0.45);
     const int pixel = 3*(y*img_dims.x+x);
     image[pixel+0] = (uint8_t)(fmin(255.0*light_accum, 255.0));
     image[pixel+1] = (uint8_t)(fmin(255.0*light_accum, 255.0));
@@ -492,27 +535,28 @@ int main(int argc, char* args[])
 {
 
     const int3 vol_d = make_int3(512,512,512);
-    const int3 img_d = make_int3(800,600,0);
+    const int3 img_d = make_int3(1200,900,0);
 
     float3 cam;
     cam.x = static_cast<float>(vol_d.x)*0.5;
     cam.y = static_cast<float>(vol_d.y)*0.5;
     cam.z = 0.0;
     float3 light;
-    light.x = -0.2;
-    light.y = -0.9;
-    light.z =  0.2;
+    light.x =  0.1;
+    light.y =  1.0;
+    light.z =  0.75;
 
     uint8_t *img = new uint8_t[3*img_d.x*img_d.y];
    
     fluid_state state(vol_d);
     
     state.impulseLoc = make_float3(0.5*float(vol_d.x),
-                                   0.5*float(vol_d.y)-120.0,
+                                   0.5*float(vol_d.y)-170.0,
                                    0.5*float(vol_d.z));
     state.impulseTemp = 4.0;
-    state.impulseDensity = 0.02;
-    state.impulseRadius = 36.0;
+    state.impulseDensity = 0.35;
+    state.impulseRadius = 28.0;
+    state.f_weight = 0.05;
     state.time_step = 0.1;
 
     dim3 full_grid(vol_d.x/8+1, vol_d.y/8+1, vol_d.z/8+1);
@@ -528,14 +572,14 @@ int main(int argc, char* args[])
     impulse<<<full_grid, full_block>>>( state.density->readTarget(), 
         make_float3(0.0), 100000.0f, 0.0f, vol_d);
 
-    for (int f=0; f<=800; f++) {
+    for (int f=0; f<=1800; f++) {
         
         std::cout << "Step " << f+1 << "\n";
         
         render_fluid(
                 img, img_d, 
                 state.density->readTarget(), 
-                vol_d, 1.0, light, cam, 0.0);
+                vol_d, 1.0, light, cam, 0.0*float(state.step));
 
         save_image(img, img_d, "output/R" + pad_number(f+1) + ".ppm");
         for (int st=0; st<1; st++) {
