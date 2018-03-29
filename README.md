@@ -4,9 +4,8 @@ A bare-bones but polished fluid simulator and volumetric renderer written in CUD
 
 **There are** [**videos**](https://drive.google.com/drive/folders/1A8PH2aZoj2ab8UDZKSdC6fsMPB5RUtyr?usp=sharing)!
 
-The organization is based on Philip Rideout's 2D OpenGL simulator (http://prideout.net/blog/?p=58)
-
-As well as George Corney's interactive WebGL demo (https://github.com/haxiomic/GPU-Fluid-Experiments)
+The organization is based on Philip Rideout's 2D OpenGL simulator (http://prideout.net/blog/?p=58),  
+as well as George Corney's interactive WebGL demo (https://github.com/haxiomic/GPU-Fluid-Experiments)
 
 TODO: More consolidation of simulation and state parameters. Temperature-based shading. Support for data types smaller than 4 byte floats.
 
