@@ -310,6 +310,33 @@ __global__ void soft_impulse( T *target, float3 c,
     }
 }
 
+template <typename T>
+__global__ void wavey_impulse( T *target, float3 c,
+    float3 size, T base, float amp, float freq, int3 vd)
+{
+    const int x = blockDim.x*blockIdx.x+threadIdx.x;
+    const int y = blockDim.y*blockIdx.y+threadIdx.y;
+    const int z = blockDim.z*blockIdx.z+threadIdx.z;
+
+    if (x >= vd.x || y >= vd.y || z >= vd.z) return;
+    
+    float3 p = make_float3(float(x),float(y),float(z));
+    
+    //float dist = length(p-c);
+    float3 minC = c-size;
+    float3 maxC = c+size;
+
+    //T cur = target[ get_voxel(x,y,z, vd) ];
+
+    if (p.x>minC.x && p.y>minC.y && p.z>minC.z &&
+        p.x<maxC.x && p.y<maxC.y && p.z<maxC.z ) {
+        float v = 0.5*(sin(freq*p.x)+sin(freq*p.z)+0.0);
+        v = v*v*v*v*v;
+        target[ get_voxel(x,y,z, vd) ] = base + amp*v;
+    }
+}
+
+
 template <typename V, typename T>
 __global__ void buoyancy( V *v_src, T *t_src, T *d_src, V *v_dest, 
     float amb_temp, float time_step, float buoy, float weight, int3 vd)
@@ -360,14 +387,14 @@ void simulate_fluid( fluid_state& state)
             state.velocity->readTarget(),
             state.temperature->readTarget(),
             state.temperature->writeTarget(),
-            state.dim, state.time_step, 0.98);
+            state.dim, state.time_step, 0.998);
     state.temperature->swap();
 
     advection<<<grid,block>>>(
             state.velocity->readTarget(),
             state.density->readTarget(),
             state.density->writeTarget(),
-            state.dim, state.time_step, 0.9995);
+            state.dim, state.time_step, 0.9999);
     state.density->swap();
 
     buoyancy<<<grid,block>>>( 
@@ -382,6 +409,7 @@ void simulate_fluid( fluid_state& state)
     location.x += 75.0*sinf(-0.003f*float(state.step));
     location.y += 75.0*cosf(-0.003f*float(state.step));
 
+    /*
     soft_impulse<<<grid,block>>>( 
             state.temperature->readTarget(), 
             location, state.impulseRadius, 
@@ -391,7 +419,8 @@ void simulate_fluid( fluid_state& state)
             state.density->readTarget(), 
             location, state.impulseRadius, 
             state.impulseDensity, 0.01, state.dim);
-    
+    */    
+
     divergence<<<grid,block>>>(
             state.velocity->readTarget(),
             state.diverge, state.dim, 0.5);
@@ -581,12 +610,20 @@ int main(int argc, char* args[])
     impulse<<<full_grid, full_block>>>( state.density->readTarget(), 
         make_float3(0.0), 100000.0f, 0.0f, vol_d);
 
+    wavey_impulse<<<full_grid, full_block>>>( state.density->readTarget(),
+        state.impulseLoc + make_float3(0.0, 70.0, 0.0),
+        make_float3(100.0, 15.0, 100.0), 0.25f, 0.0f, 1.0f, vol_d);
+
+    wavey_impulse<<<full_grid, full_block>>>( state.temperature->readTarget(),
+        state.impulseLoc + make_float3(0.0, 70.0, 0.0),
+        make_float3(100.0, 15.0, 100.0), 0.0f, 3.0f, 0.15f, vol_d);
+
     for (int f=0; f<=3000; f++) {
         
         std::cout << "Step " << f+1 << "\n";
         
-        light.x = 0.7*sinf(0.006*float(state.step));
-        light.z = 0.7*cosf(0.006*float(state.step));
+        light.x = 1.05*sinf(0.006*float(state.step));
+        light.z = 1.05*cosf(0.006*float(state.step));
         render_fluid(
                 img, img_d, 
                 state.density->readTarget(), 
